@@ -7,7 +7,7 @@ import {
   Font,
   Image,
 } from "@react-pdf/renderer";
-import type { Invoice, InvoiceItem, Client, CompanySettings } from "@/types/database";
+import type { Invoice, InvoiceItem, Client, CompanySettings, BankAccount } from "@/types/database";
 
 // Register default font
 Font.register({
@@ -251,11 +251,12 @@ const styles = StyleSheet.create({
   },
 });
 
-const formatCurrency = (amount: number) => {
-  return new Intl.NumberFormat("en-BH", {
+const formatCurrency = (amount: number, currency: string = "BHD") => {
+  const decimals = currency === "BHD" ? 3 : 2;
+  return new Intl.NumberFormat("en-US", {
     style: "currency",
-    currency: "BHD",
-    minimumFractionDigits: 3,
+    currency: currency,
+    minimumFractionDigits: decimals,
   }).format(amount);
 };
 
@@ -287,10 +288,12 @@ interface InvoicePDFProps {
   items: InvoiceItem[];
   client: Client;
   company: CompanySettings | null;
+  bankAccount: BankAccount | null;
 }
 
-export function InvoicePDF({ invoice, items, client, company }: InvoicePDFProps) {
+export function InvoicePDF({ invoice, items, client, company, bankAccount }: InvoicePDFProps) {
   const statusColors = getStatusColor(invoice.status);
+  const currency = invoice.currency || "BHD";
 
   return (
     <Document>
@@ -389,10 +392,10 @@ export function InvoicePDF({ invoice, items, client, company }: InvoicePDFProps)
               </Text>
               <Text style={[styles.cellText, styles.colQty]}>{item.quantity}</Text>
               <Text style={[styles.cellText, styles.colPrice]}>
-                {formatCurrency(item.unit_price)}
+                {formatCurrency(item.unit_price, currency)}
               </Text>
               <Text style={[styles.cellText, styles.colTotal]}>
-                {formatCurrency(item.total)}
+                {formatCurrency(item.total, currency)}
               </Text>
             </View>
           ))}
@@ -403,31 +406,32 @@ export function InvoicePDF({ invoice, items, client, company }: InvoicePDFProps)
           <View style={styles.totalsRow}>
             <Text style={styles.totalsLabel}>Subtotal</Text>
             <Text style={styles.totalsValue}>
-              {formatCurrency(invoice.subtotal)}
+              {formatCurrency(invoice.subtotal, currency)}
             </Text>
           </View>
           {invoice.tax_rate > 0 && (
             <View style={styles.totalsRow}>
               <Text style={styles.totalsLabel}>VAT ({invoice.tax_rate}%)</Text>
               <Text style={styles.totalsValue}>
-                {formatCurrency(invoice.tax_amount)}
+                {formatCurrency(invoice.tax_amount, currency)}
               </Text>
             </View>
           )}
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Total Due</Text>
-            <Text style={styles.totalValue}>{formatCurrency(invoice.total)}</Text>
+            <Text style={styles.totalValue}>{formatCurrency(invoice.total, currency)}</Text>
           </View>
         </View>
 
         {/* Bank Details */}
-        {company?.bank_name && (
+        {bankAccount && (
           <View style={styles.bankDetails}>
-            <Text style={styles.bankTitle}>Bank Details</Text>
+            <Text style={styles.bankTitle}>Bank Details ({bankAccount.account_currency || currency})</Text>
             <Text style={styles.bankText}>
-              Bank: {company.bank_name}
-              {company.bank_account && `\nAccount/IBAN: ${company.bank_account}`}
-              {company.bank_bic && `\nSWIFT/BIC: ${company.bank_bic}`}
+              {bankAccount.bank_name && `Bank: ${bankAccount.bank_name}`}
+              {bankAccount.iban && `\nIBAN: ${bankAccount.iban}`}
+              {bankAccount.swift_bic && `\nSWIFT/BIC: ${bankAccount.swift_bic}`}
+              {bankAccount.account_holder_name && `\nAccount Holder: ${bankAccount.account_holder_name}`}
             </Text>
           </View>
         )}

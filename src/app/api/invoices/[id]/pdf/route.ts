@@ -57,6 +57,36 @@ export async function GET(
       .limit(1)
       .single();
 
+    // Get bank account matching invoice currency
+    let bankAccount = null;
+    if (company) {
+      // First try to find account with matching currency
+      const { data: matchingAccount } = await supabase
+        .from("bank_accounts")
+        .select("*")
+        .eq("company_id", company.id)
+        .eq("account_currency", invoice.currency || "BHD")
+        .eq("is_active", true)
+        .limit(1)
+        .single();
+
+      if (matchingAccount) {
+        bankAccount = matchingAccount;
+      } else {
+        // Fallback to primary account
+        const { data: primaryAccount } = await supabase
+          .from("bank_accounts")
+          .select("*")
+          .eq("company_id", company.id)
+          .eq("is_primary", true)
+          .eq("is_active", true)
+          .limit(1)
+          .single();
+        
+        bankAccount = primaryAccount;
+      }
+    }
+
     // Generate PDF
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
@@ -64,6 +94,7 @@ export async function GET(
         items: items ?? [],
         client,
         company,
+        bankAccount,
       })
     );
 

@@ -180,6 +180,7 @@ export type Database = {
           invoice_number: string;
           type: "inbound" | "outbound";
           status: "draft" | "sent" | "paid" | "overdue" | "cancelled";
+          currency: string;
           issue_date: string;
           due_date: string;
           subtotal: number;
@@ -197,6 +198,7 @@ export type Database = {
           invoice_number: string;
           type: "inbound" | "outbound";
           status?: "draft" | "sent" | "paid" | "overdue" | "cancelled";
+          currency?: string;
           issue_date: string;
           due_date: string;
           subtotal?: number;
@@ -214,6 +216,7 @@ export type Database = {
           invoice_number?: string;
           type?: "inbound" | "outbound";
           status?: "draft" | "sent" | "paid" | "overdue" | "cancelled";
+          currency?: string;
           issue_date?: string;
           due_date?: string;
           subtotal?: number;

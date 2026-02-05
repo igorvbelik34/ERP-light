@@ -62,7 +62,7 @@ import {
   Download,
   Printer,
 } from "lucide-react";
-import type { Client, Invoice, InvoiceItem, CompanySettings } from "@/types/database";
+import type { Client, Invoice, InvoiceItem, CompanySettings, BankAccount } from "@/types/database";
 
 type InvoiceStatus = "draft" | "sent" | "paid" | "overdue" | "cancelled";
 type FilterStatus = "all" | InvoiceStatus;
@@ -74,6 +74,7 @@ interface InvoiceWithClient extends Invoice {
 interface InvoiceFormData {
   client_id: string;
   invoice_number: string;
+  currency: string;
   issue_date: string;
   due_date: string;
   tax_rate: number;
@@ -99,11 +100,12 @@ const statusConfig: Record<
   cancelled: { label: "Cancelled", variant: "secondary", icon: XCircle },
 };
 
-const formatCurrency = (amount: number) => {
-  return new Intl.NumberFormat("en-BH", {
+const formatCurrency = (amount: number, currency: string = "BHD") => {
+  const decimals = currency === "BHD" ? 3 : 2;
+  return new Intl.NumberFormat("en-US", {
     style: "currency",
-    currency: "BHD",
-    minimumFractionDigits: 3,
+    currency: currency,
+    minimumFractionDigits: decimals,
   }).format(amount);
 };
 
@@ -115,7 +117,7 @@ const formatDate = (dateStr: string) => {
   });
 };
 
-const getEmptyFormData = (settings: CompanySettings | null): InvoiceFormData => {
+const getEmptyFormData = (settings: CompanySettings | null, bankAccounts: BankAccount[] = []): InvoiceFormData => {
   const today = new Date();
   const dueDate = new Date(today);
   dueDate.setDate(dueDate.getDate() + (settings?.default_payment_terms ?? 14));
@@ -125,9 +127,14 @@ const getEmptyFormData = (settings: CompanySettings | null): InvoiceFormData => 
   const year = today.getFullYear();
   const invoiceNumber = `${prefix}-${year}-${String(nextNumber).padStart(4, "0")}`;
 
+  // Default to primary account currency, or first available, or BHD
+  const primaryAccount = bankAccounts.find(a => a.is_primary);
+  const defaultCurrency = primaryAccount?.account_currency || bankAccounts[0]?.account_currency || "BHD";
+
   return {
     client_id: "",
     invoice_number: invoiceNumber,
+    currency: defaultCurrency,
     issue_date: today.toISOString().split("T")[0],
     due_date: dueDate.toISOString().split("T")[0],
     tax_rate: settings?.default_tax_rate ?? 0,
@@ -141,6 +148,7 @@ export default function OutboundInvoicesPage() {
   const [invoices, setInvoices] = useState<InvoiceWithClient[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
@@ -189,6 +197,13 @@ export default function OutboundInvoicesPage() {
         .limit(1)
         .single();
 
+      // Load bank accounts (for currency selection)
+      const { data: bankAccountsData } = await supabase
+        .from("bank_accounts")
+        .select("*")
+        .eq("is_active", true)
+        .order("is_primary", { ascending: false });
+
       // Map clients to invoices
       const clientsMap = new Map(clientsData?.map((c) => [c.id, c]) ?? []);
       const invoicesWithClients = (invoicesData ?? []).map((inv) => ({
@@ -199,6 +214,7 @@ export default function OutboundInvoicesPage() {
       setInvoices(invoicesWithClients);
       setClients(clientsData ?? []);
       setCompanySettings(settingsData);
+      setBankAccounts(bankAccountsData ?? []);
     } catch (err) {
       console.error("Error loading data:", err);
     } finally {
@@ -234,10 +250,17 @@ export default function OutboundInvoicesPage() {
     return calculateSubtotal() + calculateTax();
   };
 
+  // Get unique currencies from bank accounts
+  const availableCurrencies = Array.from(new Set(
+    bankAccounts
+      .filter(a => a.account_currency)
+      .map(a => a.account_currency!)
+  ));
+
   // Open dialog for new invoice
   const handleNewInvoice = () => {
     setEditingInvoice(null);
-    setFormData(getEmptyFormData(companySettings));
+    setFormData(getEmptyFormData(companySettings, bankAccounts));
     setIsDialogOpen(true);
   };
 
@@ -254,6 +277,7 @@ export default function OutboundInvoicesPage() {
     setFormData({
       client_id: invoice.client_id,
       invoice_number: invoice.invoice_number,
+      currency: invoice.currency || "BHD",
       issue_date: invoice.issue_date,
       due_date: invoice.due_date,
       tax_rate: invoice.tax_rate,
@@ -389,6 +413,7 @@ export default function OutboundInvoicesPage() {
         user_id: user.id,
         client_id: formData.client_id,
         invoice_number: formData.invoice_number,
+        currency: formData.currency,
         type: "outbound" as const,
         status: "draft" as const,
         issue_date: formData.issue_date,
@@ -504,6 +529,19 @@ export default function OutboundInvoicesPage() {
         </Card>
       )}
 
+      {bankAccounts.length === 0 && clients.length > 0 && (
+        <Card className="border-amber-500/50 bg-amber-500/5">
+          <CardContent className="pt-6">
+            <p className="text-sm text-amber-600">
+              Add bank accounts in settings to enable currency selection for invoices.{" "}
+              <a href="/settings" className="underline font-medium">
+                Add bank account →
+              </a>
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-4">
         <div className="relative flex-1">
@@ -585,7 +623,7 @@ export default function OutboundInvoicesPage() {
                       {formatDate(invoice.due_date)}
                     </TableCell>
                     <TableCell className="text-right font-medium">
-                      {formatCurrency(invoice.total)}
+                      {formatCurrency(invoice.total, invoice.currency)}
                     </TableCell>
                     <TableCell>
                       <DropdownMenu>
@@ -667,9 +705,7 @@ export default function OutboundInvoicesPage() {
           <CardHeader className="pb-2">
             <CardDescription>Draft</CardDescription>
             <CardTitle className="text-2xl">
-              {formatCurrency(
-                invoices.filter((i) => i.status === "draft").reduce((sum, i) => sum + i.total, 0)
-              )}
+              {invoices.filter((i) => i.status === "draft").length} invoices
             </CardTitle>
           </CardHeader>
         </Card>
@@ -677,11 +713,7 @@ export default function OutboundInvoicesPage() {
           <CardHeader className="pb-2">
             <CardDescription>Outstanding</CardDescription>
             <CardTitle className="text-2xl">
-              {formatCurrency(
-                invoices
-                  .filter((i) => i.status === "sent" || i.status === "overdue")
-                  .reduce((sum, i) => sum + i.total, 0)
-              )}
+              {invoices.filter((i) => i.status === "sent" || i.status === "overdue").length} invoices
             </CardTitle>
           </CardHeader>
         </Card>
@@ -689,9 +721,7 @@ export default function OutboundInvoicesPage() {
           <CardHeader className="pb-2">
             <CardDescription>Paid</CardDescription>
             <CardTitle className="text-2xl text-emerald-600">
-              {formatCurrency(
-                invoices.filter((i) => i.status === "paid").reduce((sum, i) => sum + i.total, 0)
-              )}
+              {invoices.filter((i) => i.status === "paid").length} invoices
             </CardTitle>
           </CardHeader>
         </Card>
@@ -743,7 +773,29 @@ export default function OutboundInvoicesPage() {
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-4">
+              <div className="space-y-2">
+                <Label htmlFor="currency">Currency</Label>
+                <Select
+                  value={formData.currency}
+                  onValueChange={(v) => setFormData((prev) => ({ ...prev, currency: v }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select currency" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableCurrencies.length > 0 ? (
+                      availableCurrencies.map((currency) => (
+                        <SelectItem key={currency} value={currency}>
+                          {currency}
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <SelectItem value="BHD">BHD</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="space-y-2">
                 <Label htmlFor="issue_date">Issue Date</Label>
                 <Input
@@ -842,15 +894,15 @@ export default function OutboundInvoicesPage() {
               <div className="border-t pt-4 space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Subtotal</span>
-                  <span>{formatCurrency(calculateSubtotal())}</span>
+                  <span>{formatCurrency(calculateSubtotal(), formData.currency)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">VAT ({formData.tax_rate}%)</span>
-                  <span>{formatCurrency(calculateTax())}</span>
+                  <span>{formatCurrency(calculateTax(), formData.currency)}</span>
                 </div>
                 <div className="flex justify-between font-medium text-lg border-t pt-2">
                   <span>Total</span>
-                  <span>{formatCurrency(calculateTotal())}</span>
+                  <span>{formatCurrency(calculateTotal(), formData.currency)}</span>
                 </div>
               </div>
             </div>
