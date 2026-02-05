@@ -892,84 +892,41 @@ export default function OutboundInvoicesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* View Invoice Dialog */}
+      {/* View Invoice Dialog - PDF Preview */}
       <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Invoice {viewingInvoice?.invoice_number}</DialogTitle>
-            <DialogDescription>
-              {viewingInvoice?.client?.name} •{" "}
-              {viewingInvoice && formatDate(viewingInvoice.issue_date)}
-            </DialogDescription>
+        <DialogContent className="max-w-4xl h-[90vh] flex flex-col">
+          <DialogHeader className="flex-shrink-0">
+            <div className="flex items-center justify-between">
+              <div>
+                <DialogTitle>Invoice {viewingInvoice?.invoice_number}</DialogTitle>
+                <DialogDescription>
+                  {viewingInvoice?.client?.name} •{" "}
+                  {viewingInvoice && formatDate(viewingInvoice.issue_date)}
+                  {viewingInvoice && (
+                    <Badge 
+                      variant={statusConfig[viewingInvoice.status].variant} 
+                      className="ml-2"
+                    >
+                      {statusConfig[viewingInvoice.status].label}
+                    </Badge>
+                  )}
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
+          {/* PDF Preview */}
           {viewingInvoice && (
-            <div className="space-y-6 py-4">
-              {/* Status */}
-              <div className="flex items-center justify-between">
-                <Badge variant={statusConfig[viewingInvoice.status].variant} className="text-sm">
-                  {statusConfig[viewingInvoice.status].label}
-                </Badge>
-                <div className="text-sm text-muted-foreground">
-                  Due: {formatDate(viewingInvoice.due_date)}
-                </div>
-              </div>
-
-              {/* Items */}
-              <div className="rounded-lg border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Description</TableHead>
-                      <TableHead className="text-right w-[80px]">Qty</TableHead>
-                      <TableHead className="text-right w-[100px]">Price</TableHead>
-                      <TableHead className="text-right w-[100px]">Total</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {viewingItems.map((item) => (
-                      <TableRow key={item.id}>
-                        <TableCell>{item.description}</TableCell>
-                        <TableCell className="text-right">{item.quantity}</TableCell>
-                        <TableCell className="text-right">
-                          {formatCurrency(item.unit_price)}
-                        </TableCell>
-                        <TableCell className="text-right">{formatCurrency(item.total)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-
-              {/* Totals */}
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Subtotal</span>
-                  <span>{formatCurrency(viewingInvoice.subtotal)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">
-                    VAT ({viewingInvoice.tax_rate}%)
-                  </span>
-                  <span>{formatCurrency(viewingInvoice.tax_amount)}</span>
-                </div>
-                <div className="flex justify-between font-medium text-base border-t pt-2">
-                  <span>Total</span>
-                  <span>{formatCurrency(viewingInvoice.total)}</span>
-                </div>
-              </div>
-
-              {/* Notes */}
-              {viewingInvoice.notes && (
-                <div className="text-sm">
-                  <span className="text-muted-foreground">Notes:</span>
-                  <p className="mt-1">{viewingInvoice.notes}</p>
-                </div>
-              )}
+            <div className="flex-1 min-h-0 rounded-lg border bg-muted/30 overflow-hidden">
+              <iframe
+                src={`/api/invoices/${viewingInvoice.id}/pdf`}
+                className="w-full h-full"
+                title={`Invoice ${viewingInvoice.invoice_number}`}
+              />
             </div>
           )}
 
-          <DialogFooter className="flex-col sm:flex-row gap-2">
+          <DialogFooter className="flex-shrink-0 flex-col sm:flex-row gap-2 pt-4">
             <div className="flex gap-2 w-full sm:w-auto">
               <Button
                 variant="outline"

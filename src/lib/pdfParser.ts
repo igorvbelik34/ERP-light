@@ -114,35 +114,66 @@ export interface BahrainCRCertificate {
 }
 
 /**
- * Fixes text with spaces between letters (common PDF extraction issue)
- * Example: "Re gi st ra ti on" -> "Registration"
- * Example: "BEL IK C ON SU LT IN G" -> "BELIK CONSULTING"
+ * Normalizes pdf2json output: fixes dates, numbers, abbreviations.
+ * Does NOT try to merge letter groups — that's unreliable.
  */
-function fixSpacedText(text: string): string {
-  // First, normalize multiple spaces to single space
-  let fixed = text.replace(/\s+/g, " ");
-  
-  // Fix spaced dates first: "14/ 10/ 2025" -> "14/10/2025"
+function normalizeRawText(text: string): string {
+  let fixed = text.replace(/\s+/g, " ").trim();
   fixed = fixed.replace(/(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{2,4})/g, "$1/$2/$3");
-  
-  // Fix spaced numbers with hyphen: "190640 - 1" -> "190640-1"
   fixed = fixed.replace(/(\d+)\s*-\s*(\d+)/g, "$1-$2");
-  
-  // Fix specific abbreviations
   fixed = fixed.replace(/W\.\s*L\.\s*L\.?/gi, "W.L.L");
   fixed = fixed.replace(/B\.\s*S\.\s*C\.?/gi, "B.S.C");
   fixed = fixed.replace(/P\.\s*O\.\s*B\s*OX/gi, "P.O.BOX");
-  
-  // Fix two-letter groups separated by spaces: "BEL IK" -> "BELIK"
-  // This handles the Bahrain PDF format where text is split into 2-3 letter chunks
-  // Pattern: sequences of 2-4 uppercase letters separated by single spaces
-  fixed = fixed.replace(/\b([A-Z]{2,4})\s+([A-Z]{2,4})\s+([A-Z]{2,4})\s+([A-Z]{2,4})\s+([A-Z]{2,4})\s+([A-Z]{2,4})\b/g, "$1$2$3$4$5$6");
-  fixed = fixed.replace(/\b([A-Z]{2,4})\s+([A-Z]{2,4})\s+([A-Z]{2,4})\s+([A-Z]{2,4})\s+([A-Z]{2,4})\b/g, "$1$2$3$4$5");
-  fixed = fixed.replace(/\b([A-Z]{2,4})\s+([A-Z]{2,4})\s+([A-Z]{2,4})\s+([A-Z]{2,4})\b/g, "$1$2$3$4");
-  fixed = fixed.replace(/\b([A-Z]{2,4})\s+([A-Z]{2,4})\s+([A-Z]{2,4})\b/g, "$1$2$3");
-  fixed = fixed.replace(/\b([A-Z]{2,3})\s+([A-Z]{2,3})\b/g, "$1$2");
-  
   return fixed;
+}
+
+/**
+ * Extracts company name from the fragmented text between "Nam e" and "W.L.L" / "B.S.C".
+ * pdf2json splits text into 1-4 char fragments: "BEL IK C ON SU LT IN G W.L.L"
+ * Strategy: grab everything between the label and suffix, strip spaces, re-insert word boundaries.
+ */
+function extractCompanyName(text: string): { name: string; suffix: string } | null {
+  // Try multiple patterns for different certificate formats
+  const patterns = [
+    // Pattern 1: "Name" followed by company name and suffix
+    /(?:Nam\s*e)\s+([\sA-Z0-9.&'_-]+?)\s*(W\.L\.L|B\.S\.C|S\.P\.C)/i,
+    // Pattern 2: Just look for anything before W.L.L/B.S.C (more flexible)
+    /([A-Z][A-Z0-9\s.&'_-]{3,50})\s*(W\.L\.L|B\.S\.C|S\.P\.C)/i,
+    // Pattern 3: Commercial Name field
+    /(?:Commercial\s*Name|Trade\s*Name)[:\s]*([\sA-Z0-9.&'_-]+?)\s*(W\.L\.L|B\.S\.C|S\.P\.C)?/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const rawName = match[1];
+      const suffix = (match[2] || "").toUpperCase();
+
+      // Remove all spaces to get the concatenated name
+      let name = rawName.replace(/\s+/g, "");
+
+      // Re-insert spaces before known business words
+      const businessWords = [
+        "CONSULTING", "CONSULTANCY", "SERVICES", "TRADING", "COMPANY",
+        "ENTERPRISES", "INTERNATIONAL", "SOLUTIONS", "TECHNOLOGIES",
+        "GROUP", "HOLDINGS", "INDUSTRIES", "INVESTMENTS", "MANAGEMENT",
+        "ENGINEERING", "CONSTRUCTION", "LOGISTICS", "CONTRACTING",
+      ];
+      for (const word of businessWords) {
+        const idx = name.toUpperCase().indexOf(word);
+        if (idx > 0 && name[idx - 1] !== " ") {
+          name = name.slice(0, idx) + " " + name.slice(idx);
+        }
+      }
+
+      const finalName = suffix ? `${name.trim()} ${suffix}` : name.trim();
+      if (finalName.length > 3) {
+        return { name: name.trim(), suffix: suffix || "" };
+      }
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -168,148 +199,176 @@ export function parseBahrainCRCertificate(text: string): BahrainCRCertificate {
     activities: [],
   };
 
-  // First normalize and fix spaced text
-  const normalizedText = fixSpacedText(text);
+  const normalized = normalizeRawText(text);
   
-  // Also work with the original text with fixed dates for date patterns
-  let rawText = text.replace(/\s+/g, " ").trim();
-  // Fix date spacing in rawText too: "14/ 10/ 2025" -> "14/10/2025"
-  rawText = rawText.replace(/(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{2,4})/g, "$1/$2/$3");
-  
-  console.log("=== NORMALIZED TEXT START ===");
-  console.log(normalizedText.substring(0, 1500));
-  console.log("=== NORMALIZED TEXT END ===");
+  // Log normalized text for debugging
+  console.log("Normalized text (first 500 chars):", normalized.substring(0, 500));
 
-  // Extract CR Number (format: 190640-1)
-  const crMatch = normalizedText.match(/(\d{5,}-\d+)/);
-  if (crMatch) {
-    result.cr_number = crMatch[1];
-  }
-
-  // Extract Company Name - look for pattern: "Nam e COMPANY_NAME W.L.L"
-  // In the raw text, it appears as "BEL IK C ON SU LT IN G W.L.L"
-  // After normalization: "BELIKCONSULTING W.L.L" or similar
-  const companyPatterns = [
-    // Pattern for normalized text
-    /(?:Nam\s*e|Name)\s+([A-Z][A-Z0-9]+(?:\s+[A-Z0-9]+)*\s+W\.L\.L)/i,
-    // Pattern for partially spaced text: "BEL IK C ON SU LT IN G W.L.L"
-    /(?:Nam\s*e|Name)\s+([A-Z]{2,4}(?:\s+[A-Z]{2,4})+\s+W\.L\.L)/i,
+  // --- CR Number (e.g. "190640-1") ---
+  // Try multiple patterns
+  const crPatterns = [
+    /CR\s*(?:No|Number)?[.:\s]*(\d{5,}-\d+)/i,
+    /(?:Commercial\s*Registration|Registration)\s*(?:No|Number)?[.:\s]*(\d{5,}-\d+)/i,
+    /(\d{5,}-\d+)/,  // Fallback: any number in format XXXXX-X
   ];
   
-  for (const pattern of companyPatterns) {
-    const match = normalizedText.match(pattern);
-    if (match) {
-      // Clean up the name - first remove W.L.L to process name separately
-      let name = match[1].trim();
-      const hasWLL = /W\.L\.L$/i.test(name);
-      name = name.replace(/\s*W\.L\.L$/i, "");
-      
-      // Remove all internal spaces to get clean name
-      name = name.replace(/\s+/g, "");
-      
-      // Insert spaces before common business words
-      const businessWords = [
-        "CONSULTING", "SERVICES", "TRADING", "COMPANY", "ENTERPRISES",
-        "INTERNATIONAL", "SOLUTIONS", "TECHNOLOGIES", "GROUP", "HOLDINGS",
-        "INDUSTRIES", "INVESTMENTS", "MANAGEMENT", "ENGINEERING", "CONSTRUCTION"
-      ];
-      
-      for (const word of businessWords) {
-        // Insert space before the word if it's found and not at start
-        const regex = new RegExp(`([A-Z])${word}`, "gi");
-        name = name.replace(regex, `$1 ${word}`);
-      }
-      
-      // Add W.L.L back if it was there
-      if (hasWLL) {
-        name = name + " W.L.L";
-      }
-      
-      result.company_name = name.trim();
-      result.legal_name = name.trim();
+  for (const pattern of crPatterns) {
+    const crMatch = normalized.match(pattern);
+    if (crMatch) {
+      result.cr_number = crMatch[1];
       break;
     }
   }
 
-  // Extract Registration Date - pattern: "Da te 14/10/2025"
-  // In raw text: "Re gi st ra ti on Da te 14/10/2025"
-  const regDateMatch = rawText.match(/(?:Re\s*gi\s*st\s*ra\s*ti\s*on\s*)?Da\s*te\s*(\d{1,2}\/\d{1,2}\/\d{4})/i);
-  if (regDateMatch) {
-    // This might match Due Date first, so let's be more specific
-    const specificRegDate = rawText.match(/Re\s*gi\s*st\s*ra\s*ti\s*on\s*Da\s*te\s*(\d{1,2}\/\d{1,2}\/\d{4})/i);
-    if (specificRegDate) {
-      result.registration_date = specificRegDate[1];
+  // --- Company Name ---
+  const company = extractCompanyName(normalized);
+  if (company) {
+    const fullName = company.suffix ? `${company.name} ${company.suffix}` : company.name;
+    result.company_name = fullName;
+    result.legal_name = fullName;
+  }
+
+  // --- Registration Date ---
+  const regDatePatterns = [
+    /Re?\s*g?\s*i?\s*st\s*ra\s*ti\s*on\s*Da?\s*te?\s*(\d{1,2}\/\d{1,2}\/\d{4})/i,
+    /(?:Issue|Start)\s*Date[:\s]*(\d{1,2}\/\d{1,2}\/\d{4})/i,
+    /Date\s*of\s*(?:Issue|Registration)[:\s]*(\d{1,2}\/\d{1,2}\/\d{4})/i,
+  ];
+  
+  for (const pattern of regDatePatterns) {
+    const regDate = normalized.match(pattern);
+    if (regDate) {
+      result.registration_date = regDate[1];
+      break;
     }
   }
 
-  // Extract Due/Expiry Date - pattern: "Du e Da te 14/10/2026"
-  const dueDateMatch = rawText.match(/Du\s*e\s*Da\s*te\s*(\d{1,2}\/\d{1,2}\/\d{4})/i);
-  if (dueDateMatch) {
-    result.expiry_date = dueDateMatch[1];
+  // --- Expiry / Due Date ---
+  const dueDatePatterns = [
+    /Du\s*e\s*Da?\s*te?\s*(\d{1,2}\/\d{1,2}\/\d{4})/i,
+    /(?:Expiry|Expir|Valid\s*Until)\s*Date[:\s]*(\d{1,2}\/\d{1,2}\/\d{4})/i,
+    /Valid\s*(?:Until|To)[:\s]*(\d{1,2}\/\d{1,2}\/\d{4})/i,
+  ];
+  
+  for (const pattern of dueDatePatterns) {
+    const dueDate = normalized.match(pattern);
+    if (dueDate) {
+      result.expiry_date = dueDate[1];
+      break;
+    }
   }
 
-  // Extract Registration Type
-  if (/W\.L\.L|Limited\s*Liability|Li\s*abi\s*lit\s*y/i.test(normalizedText)) {
+  // --- Registration Type ---
+  if (/W\.L\.L/i.test(normalized) || /Li\s*m?\s*it\s*ed\s*Li\s*abi\s*lit\s*y/i.test(normalized)) {
     result.registration_type = "W.L.L (Limited Liability Company)";
-  } else if (/B\.S\.C/i.test(normalizedText)) {
+  } else if (/B\.S\.C/i.test(normalized)) {
     result.registration_type = "B.S.C (Bahrain Shareholding Company)";
-  } else if (/Single\s*Person/i.test(normalizedText)) {
+  } else if (/S\s*i?\s*ngle\s*Per\s*son/i.test(normalized)) {
     result.registration_type = "Single Person Company";
-  } else if (/Partnership/i.test(normalizedText)) {
+  } else if (/Part\s*ner\s*ship/i.test(normalized)) {
     result.registration_type = "Partnership";
-  } else if (/Branch/i.test(normalizedText)) {
+  } else if (/Branch/i.test(normalized)) {
     result.registration_type = "Branch";
   }
 
-  // Extract Status - pattern: "AC TI VE" or "ACTIVE"
-  if (/AC\s*TI\s*VE|ACTIVE/i.test(rawText)) {
+  // --- Status ---
+  if (/AC\s*TI\s*VE|ACTIVE/i.test(normalized)) {
     result.status = "Active";
-  } else if (/EXPIRED|INACTIVE|CANCELLED/i.test(rawText)) {
+  } else if (/EXPIRED|INACTIVE|CANCELLED/i.test(normalized)) {
     result.status = "Inactive";
   }
 
-  // Extract Address from raw text
-  // Pattern: "MA NAM A / AL JU FF AI R / ... 345 4526 1301 51"
-  // The numbers at end are: Block Road Building Flat
-  const addressMatch = rawText.match(/MA\s*NAM\s*A\s*\/\s*([A-Z\s]+?)\/[^0-9]*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/i);
-  if (addressMatch) {
-    // Clean up area name (remove spaces between letters)
-    let area = addressMatch[1].trim().replace(/\s+/g, "");
-    // Fix common area name: ALJUFFAIR
-    if (area.toUpperCase().includes("JU") || area.toUpperCase().includes("JUFF")) {
-      area = "Aljuffair";
+  // --- Address ---
+  // Try multiple patterns for Bahrain addresses
+  
+  // Pattern 1: "MANAMA / ALJUFFAIR / <arabic> 345 4526 1301 51"
+  // Numbers are: Block Road Building Flat
+  const addressPatterns = [
+    /MA\s*N?\s*AM\s*A\s*\/\s*([A-Z\s]+?)\/[^0-9]*(\d{2,4})\s+(\d{3,5})\s+(\d{2,5})\s+(\d{1,4})/i,
+    /(?:Manama|Capital)[^\d]*\/\s*([A-Za-z\s]+)[^\d]*(\d{2,4})\s+(\d{3,5})\s+(\d{2,5})\s+(\d{1,4})/i,
+  ];
+  
+  for (const pattern of addressPatterns) {
+    const addressMatch = normalized.match(pattern);
+    if (addressMatch) {
+      let area = addressMatch[1].trim().replace(/\s+/g, "");
+      // Capitalize properly
+      area = area.charAt(0).toUpperCase() + area.slice(1).toLowerCase();
+      result.address.area = area;
+      result.address.block = addressMatch[2];
+      result.address.road = addressMatch[3];
+      result.address.building = addressMatch[4];
+      result.address.flat = addressMatch[5];
+      result.address.city = "Manama";
+      break;
     }
-    result.address.area = area;
-    result.address.block = addressMatch[2];
-    result.address.road = addressMatch[3];
-    result.address.building = addressMatch[4];
-    result.address.flat = addressMatch[5];
-    result.address.city = "Manama";
+  }
+  
+  // If no full match, try to extract individual components
+  if (!result.address.city) {
+    // Try to find city
+    const cityMatch = normalized.match(/(?:City|Governorate)[:\s]*([A-Za-z]+)/i);
+    if (cityMatch) {
+      result.address.city = cityMatch[1];
+    } else if (/Manama/i.test(normalized)) {
+      result.address.city = "Manama";
+    } else if (/Muharraq/i.test(normalized)) {
+      result.address.city = "Muharraq";
+    } else if (/Riffa/i.test(normalized)) {
+      result.address.city = "Riffa";
+    }
+    
+    // Try to find block
+    const blockMatch = normalized.match(/Block[:\s]*(\d+)/i);
+    if (blockMatch) result.address.block = blockMatch[1];
+    
+    // Try to find road
+    const roadMatch = normalized.match(/Road[:\s]*(\d+)/i);
+    if (roadMatch) result.address.road = roadMatch[1];
+    
+    // Try to find building
+    const buildingMatch = normalized.match(/(?:Building|Bldg)[:\s]*(\d+)/i);
+    if (buildingMatch) result.address.building = buildingMatch[1];
+    
+    // Try to find flat
+    const flatMatch = normalized.match(/(?:Flat|Unit|Office)[:\s]*(\d+)/i);
+    if (flatMatch) result.address.flat = flatMatch[1];
+    
+    // Try to find area
+    const areaPatterns = [
+      /(?:Area|District)[:\s]*([A-Za-z]+)/i,
+      /(Juffair|Aljuffair|Seef|Diplomatic\s*Area|Sanabis|Adliya|Hoora|Gudaibiya)/i,
+    ];
+    for (const pattern of areaPatterns) {
+      const areaMatch = normalized.match(pattern);
+      if (areaMatch) {
+        result.address.area = areaMatch[1];
+        break;
+      }
+    }
   }
 
-  // Extract Activities from raw text (they contain spaces too)
+  // --- Activities ---
   const activityPatterns = [
-    { pattern: /head\s*of\s*fi\s*ce|Management\s*Office/i, name: "Head Office / Regional HQ" },
+    { pattern: /head\s*.{0,3}of\s*fi\s*ce|Management\s*.{0,3}O\s*ff\s*ic/i, name: "Head Office / Regional HQ" },
     { pattern: /Off\s*sh\s*or\s*e\s*Co\s*nt\s*ra\s*ct|EPC/i, name: "Offshore Contracting / EPC" },
-    { pattern: /Co\s*mp\s*ut\s*er\s*C\s*ons\s*ul\s*ta\s*nc\s*y/i, name: "Computer Consultancy & IT Services" },
-    { pattern: /fa\s*ci\s*lit\s*ie\s*s\s*ma\s*nagem\s*ent/i, name: "Computer Facilities Management" },
-    { pattern: /Ma\s*nagem\s*ent\s*c\s*ons\s*ul\s*ta\s*nc\s*y/i, name: "Management Consultancy" },
-    { pattern: /Software\s*Development/i, name: "Software Development" },
-    { pattern: /Trading/i, name: "General Trading" },
-    { pattern: /Import.*Export/i, name: "Import & Export" },
-    { pattern: /Construction/i, name: "Construction" },
-    { pattern: /Real\s*Estate/i, name: "Real Estate" },
-    { pattern: /Engineering/i, name: "Engineering Services" },
-    { pattern: /Marketing/i, name: "Marketing Services" },
+    { pattern: /Co\s*mp\s*ut\s*er\s*.{0,3}C\s*ons\s*ul\s*ta\s*nc\s*y/i, name: "Computer Consultancy & IT Services" },
+    { pattern: /fa\s*ci\s*lit\s*ie?\s*s\s*ma\s*nagem\s*ent/i, name: "Computer Facilities Management" },
+    { pattern: /Ma\s*nagem\s*ent\s*.{0,3}c\s*ons\s*ul\s*ta\s*nc\s*y/i, name: "Management Consultancy" },
+    { pattern: /Software/i, name: "Software Development" },
+    { pattern: /Tra\s*d\s*ing/i, name: "General Trading" },
+    { pattern: /Im\s*port.*Ex\s*port/i, name: "Import & Export" },
+    { pattern: /Con\s*st\s*ruc\s*ti\s*on/i, name: "Construction" },
+    { pattern: /Re\s*al\s*Est\s*at\s*e/i, name: "Real Estate" },
+    { pattern: /Eng\s*in\s*eer\s*ing/i, name: "Engineering Services" },
+    { pattern: /Mar\s*ket\s*ing/i, name: "Marketing Services" },
   ];
 
-  const foundActivities: string[] = [];
   for (const { pattern, name } of activityPatterns) {
-    if (pattern.test(rawText) && !foundActivities.includes(name)) {
-      foundActivities.push(name);
+    if (pattern.test(normalized) && !result.activities.includes(name)) {
+      result.activities.push(name);
     }
   }
-  result.activities = foundActivities;
 
   return result;
 }

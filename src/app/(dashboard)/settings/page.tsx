@@ -289,16 +289,28 @@ export default function SettingsPage() {
       const formData = new FormData();
       formData.append("file", file);
 
+      console.log("Uploading certificate for parsing:", file.name, file.size);
+
       const parseResponse = await fetch("/api/parse-certificate", {
         method: "POST",
         body: formData,
       });
 
       if (!parseResponse.ok) {
-        throw new Error("Failed to parse certificate");
+        const errorData = await parseResponse.json().catch(() => ({}));
+        console.error("Parse API error:", parseResponse.status, errorData);
+        throw new Error(errorData.error || "Failed to parse certificate");
       }
 
       const parseResult = await parseResponse.json();
+      console.log("Parse result:", parseResult);
+      console.log("Parsed data:", parseResult.parsed);
+      
+      if (!parseResult.parsed || (!parseResult.parsed.company_name && !parseResult.parsed.cr_number)) {
+        console.warn("No data extracted from certificate. Raw text:", parseResult.rawText?.substring(0, 500));
+        alert("Could not extract data from this certificate. Please check that it's a valid Bahrain CR Certificate.");
+      }
+      
       setParsedData(parseResult.parsed);
       setShowParsedData(true);
       setParsingCertificate(false);
@@ -336,8 +348,8 @@ export default function SettingsPage() {
     }
   };
 
-  const applyParsedData = () => {
-    if (!parsedData) return;
+  const applyParsedData = async () => {
+    if (!parsedData || !user?.id) return;
 
     // Build address string
     const addressParts: string[] = [];
@@ -346,18 +358,57 @@ export default function SettingsPage() {
     if (parsedData.address.road) addressParts.push(`Road ${parsedData.address.road}`);
     if (parsedData.address.block) addressParts.push(`Block ${parsedData.address.block}`);
 
-    setSettings((prev) => ({
-      ...prev,
-      company_name: parsedData.company_name || prev.company_name,
-      legal_name: parsedData.legal_name || prev.legal_name,
-      tax_registration_number: parsedData.cr_number || prev.tax_registration_number,
-      address_line1: addressParts.join(", ") || prev.address_line1,
-      city: parsedData.address.city || prev.city,
-      state: parsedData.address.area || prev.state,
+    const updatedSettings = {
+      ...settings,
+      company_name: parsedData.company_name || settings.company_name,
+      legal_name: parsedData.legal_name || settings.legal_name,
+      tax_registration_number: parsedData.cr_number || settings.tax_registration_number,
+      address_line1: addressParts.join(", ") || settings.address_line1,
+      city: parsedData.address.city || settings.city,
+      state: parsedData.address.area || settings.state,
       country: "Bahrain",
-    }));
+    };
 
+    setSettings(updatedSettings);
     setShowParsedData(false);
+
+    // Auto-save to database
+    setIsSaving(true);
+    try {
+      const supabase = createClient();
+
+      if (settingsId) {
+        const { error } = await supabase
+          .from("company_settings")
+          .update({
+            ...updatedSettings,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", settingsId);
+
+        if (error) throw error;
+      } else {
+        const { data, error } = await supabase
+          .from("company_settings")
+          .insert({
+            user_id: user.id,
+            ...updatedSettings,
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+        if (data) setSettingsId(data.id);
+      }
+
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2000);
+    } catch (err) {
+      console.error("Error auto-saving settings:", err);
+      alert("Data applied to form but failed to auto-save. Please click Save manually.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   if (isLoading) {

@@ -5,6 +5,7 @@ import {
   View,
   StyleSheet,
   Font,
+  Image,
 } from "@react-pdf/renderer";
 import type { Invoice, InvoiceItem, Client, CompanySettings } from "@/types/database";
 
@@ -27,33 +28,44 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: 30,
+    alignItems: "flex-start",
+    marginBottom: 20,
   },
   companyInfo: {
-    maxWidth: "50%",
+    width: "60%",
   },
   companyName: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: "bold",
     color: "#1a1a1a",
-    marginBottom: 4,
+    marginBottom: 6,
   },
   companyDetails: {
     fontSize: 9,
     color: "#666666",
-    lineHeight: 1.5,
+    lineHeight: 1.6,
+  },
+  headerRight: {
+    alignItems: "flex-end",
+    width: "35%",
+  },
+  companyLogo: {
+    width: 70,
+    height: 70,
+    objectFit: "contain",
+    marginBottom: 10,
   },
   invoiceTitle: {
-    textAlign: "right",
+    alignItems: "flex-end",
   },
   invoiceLabel: {
-    fontSize: 24,
+    fontSize: 28,
     fontWeight: "bold",
     color: "#1a1a1a",
     marginBottom: 4,
   },
   invoiceNumber: {
-    fontSize: 12,
+    fontSize: 11,
     color: "#666666",
     marginBottom: 2,
   },
@@ -65,7 +77,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
     padding: "4 10",
     borderRadius: 4,
-    alignSelf: "flex-end",
   },
   statusText: {
     fontSize: 9,
@@ -286,6 +297,7 @@ export function InvoicePDF({ invoice, items, client, company }: InvoicePDFProps)
       <Page size="A4" style={styles.page}>
         {/* Header */}
         <View style={styles.header}>
+          {/* Left side - Company Info */}
           <View style={styles.companyInfo}>
             <Text style={styles.companyName}>
               {company?.company_name || "Your Company"}
@@ -299,24 +311,34 @@ export function InvoicePDF({ invoice, items, client, company }: InvoicePDFProps)
               {company?.vat_id && `\nVAT: ${company.vat_id}`}
             </Text>
           </View>
-          <View style={styles.invoiceTitle}>
-            <Text style={styles.invoiceLabel}>INVOICE</Text>
-            <Text style={styles.invoiceNumber}>{invoice.invoice_number}</Text>
-            <Text style={styles.invoiceDate}>
-              Issued: {formatDate(invoice.issue_date)}
-            </Text>
-            <Text style={styles.invoiceDate}>
-              Due: {formatDate(invoice.due_date)}
-            </Text>
-            <View
-              style={[
-                styles.statusBadge,
-                { backgroundColor: statusColors.bg },
-              ]}
-            >
-              <Text style={[styles.statusText, { color: statusColors.text }]}>
-                {invoice.status.toUpperCase()}
+
+          {/* Right side - Logo and Invoice Info */}
+          <View style={styles.headerRight}>
+            {company?.logo_url && (
+              <Image
+                style={styles.companyLogo}
+                src={company.logo_url}
+              />
+            )}
+            <View style={styles.invoiceTitle}>
+              <Text style={styles.invoiceLabel}>INVOICE</Text>
+              <Text style={styles.invoiceNumber}>{invoice.invoice_number}</Text>
+              <Text style={styles.invoiceDate}>
+                Issued: {formatDate(invoice.issue_date)}
               </Text>
+              <Text style={styles.invoiceDate}>
+                Due: {formatDate(invoice.due_date)}
+              </Text>
+              <View
+                style={[
+                  styles.statusBadge,
+                  { backgroundColor: statusColors.bg },
+                ]}
+              >
+                <Text style={[styles.statusText, { color: statusColors.text }]}>
+                  {invoice.status.toUpperCase()}
+                </Text>
+              </View>
             </View>
           </View>
         </View>
