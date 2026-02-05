@@ -372,3 +372,172 @@ export function parseBahrainCRCertificate(text: string): BahrainCRCertificate {
 
   return result;
 }
+
+// ============================================
+// Bank Letter / Bank Statement Parser
+// ============================================
+
+export interface BankLetterData {
+  bank_name: string | null;
+  bank_account: string | null;  // IBAN
+  bank_bic: string | null;      // SWIFT/BIC
+  bank_address: string | null;
+  bank_country: string | null;
+  account_currency: string | null;
+  account_holder_name: string | null;
+}
+
+/**
+ * Parses Bank Letter or Bank Statement PDF to extract account details
+ */
+export function parseBankLetter(text: string): BankLetterData {
+  const result: BankLetterData = {
+    bank_name: null,
+    bank_account: null,
+    bank_bic: null,
+    bank_address: null,
+    bank_country: null,
+    account_currency: null,
+    account_holder_name: null,
+  };
+
+  const normalized = normalizeRawText(text);
+  
+  console.log("Parsing bank letter, normalized text (first 800 chars):", normalized.substring(0, 800));
+
+  // --- IBAN (International Bank Account Number) ---
+  // Format: 2 letters country code + 2 check digits + up to 30 alphanumeric
+  // Bahrain IBAN: BH + 2 digits + 4 chars bank code + 14 digits account
+  const ibanPatterns = [
+    /IBAN[:\s]*([A-Z]{2}\d{2}[A-Z0-9]{4,30})/i,
+    /Account\s*(?:Number|No\.?)?[:\s]*([A-Z]{2}\d{2}[A-Z0-9]{4,30})/i,
+    /([A-Z]{2}\d{2}[A-Z]{4}[A-Z0-9]{10,20})/,  // Generic IBAN pattern
+    /(BH\d{2}[A-Z]{4}\d{14})/i,  // Bahrain specific
+  ];
+  
+  for (const pattern of ibanPatterns) {
+    const match = normalized.match(pattern);
+    if (match) {
+      // Clean up IBAN - remove spaces
+      result.bank_account = match[1].replace(/\s/g, '').toUpperCase();
+      break;
+    }
+  }
+
+  // --- SWIFT / BIC Code ---
+  // Format: 8 or 11 characters (BANKCCLL or BANKCCLLXXX)
+  const swiftPatterns = [
+    /(?:SWIFT|BIC)[:\s]*([A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)/i,
+    /(?:SWIFT|BIC)\s*(?:Code)?[:\s]*([A-Z]{6}[A-Z0-9]{2,5})/i,
+    /\b([A-Z]{4}BH[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b/,  // Bahrain bank SWIFT
+  ];
+  
+  for (const pattern of swiftPatterns) {
+    const match = normalized.match(pattern);
+    if (match) {
+      result.bank_bic = match[1].toUpperCase();
+      break;
+    }
+  }
+
+  // --- Bank Name ---
+  const bankNamePatterns = [
+    /(?:Bank\s*Name|Beneficiary\s*Bank)[:\s]*([A-Za-z\s&.]+?)(?:\n|,|SWIFT|BIC|IBAN|Address)/i,
+    /(National\s*Bank\s*of\s*Bahrain|NBB)/i,
+    /(Ahli\s*United\s*Bank|AUB)/i,
+    /(Bank\s*of\s*Bahrain\s*and\s*Kuwait|BBK)/i,
+    /(Bahrain\s*Islamic\s*Bank|BIsB)/i,
+    /(Al\s*Salam\s*Bank)/i,
+    /(Kuwait\s*Finance\s*House|KFH)/i,
+    /(Standard\s*Chartered\s*Bank)/i,
+    /(HSBC)/i,
+    /(Citibank)/i,
+    /(Arab\s*Banking\s*Corporation|ABC)/i,
+    /(Gulf\s*International\s*Bank|GIB)/i,
+  ];
+  
+  for (const pattern of bankNamePatterns) {
+    const match = normalized.match(pattern);
+    if (match) {
+      let bankName = match[1].trim();
+      // Clean up and capitalize
+      bankName = bankName.replace(/\s+/g, ' ').trim();
+      if (bankName.length > 2 && bankName.length < 100) {
+        result.bank_name = bankName;
+        break;
+      }
+    }
+  }
+
+  // --- Account Holder Name ---
+  const holderPatterns = [
+    /(?:Account\s*(?:Holder|Name)|Beneficiary(?:\s*Name)?|In\s*(?:the\s*)?Name\s*of)[:\s]*([A-Za-z\s.&'-]+?)(?:\n|Account|IBAN|Address|,)/i,
+    /(?:A\/C\s*Name|Customer\s*Name)[:\s]*([A-Za-z\s.&'-]+?)(?:\n|Account|IBAN)/i,
+  ];
+  
+  for (const pattern of holderPatterns) {
+    const match = normalized.match(pattern);
+    if (match) {
+      const holderName = match[1].trim().replace(/\s+/g, ' ');
+      if (holderName.length > 2 && holderName.length < 100) {
+        result.account_holder_name = holderName;
+        break;
+      }
+    }
+  }
+
+  // --- Currency ---
+  const currencyPatterns = [
+    /(?:Currency|CCY)[:\s]*([A-Z]{3})/i,
+    /(?:Account\s*Currency)[:\s]*([A-Z]{3})/i,
+    /\b(BHD|USD|EUR|GBP|AED|SAR|KWD|OMR)\b/,
+  ];
+  
+  for (const pattern of currencyPatterns) {
+    const match = normalized.match(pattern);
+    if (match) {
+      result.account_currency = match[1].toUpperCase();
+      break;
+    }
+  }
+  
+  // Default to BHD for Bahrain
+  if (!result.account_currency && result.bank_account?.startsWith('BH')) {
+    result.account_currency = 'BHD';
+  }
+
+  // --- Bank Address ---
+  const addressPatterns = [
+    /(?:Bank\s*Address|Branch\s*Address|Address)[:\s]*([A-Za-z0-9\s,.-]+?)(?:\n\n|Country|SWIFT|BIC|Tel|Phone|Fax)/i,
+    /(?:P\.?O\.?\s*Box\s*\d+[,\s]*[A-Za-z\s,]+)/i,
+  ];
+  
+  for (const pattern of addressPatterns) {
+    const match = normalized.match(pattern);
+    if (match) {
+      const address = match[1] || match[0];
+      const cleanAddress = address.trim().replace(/\s+/g, ' ');
+      if (cleanAddress.length > 5 && cleanAddress.length < 200) {
+        result.bank_address = cleanAddress;
+        break;
+      }
+    }
+  }
+
+  // --- Bank Country ---
+  if (/Bahrain|Manama|BH\d{2}/i.test(normalized)) {
+    result.bank_country = 'Bahrain';
+  } else if (/United\s*Arab\s*Emirates|UAE|Dubai|Abu\s*Dhabi/i.test(normalized)) {
+    result.bank_country = 'UAE';
+  } else if (/Saudi\s*Arabia|KSA|Riyadh|Jeddah/i.test(normalized)) {
+    result.bank_country = 'Saudi Arabia';
+  } else if (/Kuwait/i.test(normalized)) {
+    result.bank_country = 'Kuwait';
+  } else if (/Oman|Muscat/i.test(normalized)) {
+    result.bank_country = 'Oman';
+  } else if (/Qatar|Doha/i.test(normalized)) {
+    result.bank_country = 'Qatar';
+  }
+
+  return result;
+}

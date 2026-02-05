@@ -33,8 +33,12 @@ import {
   Eye,
   Sparkles,
   X,
+  Trash2,
+  Star,
+  Plus,
 } from "lucide-react";
-import type { CompanySettings } from "@/types/database";
+import { Badge } from "@/components/ui/badge";
+import type { CompanySettings, BankAccount, InsertBankAccount } from "@/types/database";
 
 type SettingsFormData = Omit<CompanySettings, "id" | "user_id" | "created_at" | "updated_at">;
 
@@ -56,6 +60,11 @@ const defaultSettings: SettingsFormData = {
   bank_account: "",
   bank_bic: "",
   bank_correspondent_account: "",
+  bank_letter_url: "",
+  bank_address: "",
+  bank_country: "Bahrain",
+  account_currency: "BHD",
+  account_holder_name: "",
   logo_url: "",
   cr_certificate_url: "",
   invoice_prefix: "INV",
@@ -84,6 +93,16 @@ interface ParsedCertificate {
   activities: string[];
 }
 
+interface ParsedBankLetter {
+  bank_name: string | null;
+  bank_account: string | null;  // Will be mapped to 'iban'
+  bank_bic: string | null;      // Will be mapped to 'swift_bic'
+  bank_address: string | null;
+  bank_country: string | null;
+  account_currency: string | null;
+  account_holder_name: string | null;
+}
+
 export default function SettingsPage() {
   const { user } = useAuth();
   const [settings, setSettings] = useState<SettingsFormData>(defaultSettings);
@@ -98,6 +117,17 @@ export default function SettingsPage() {
   const [parsingCertificate, setParsingCertificate] = useState(false);
   const [parsedData, setParsedData] = useState<ParsedCertificate | null>(null);
   const [showParsedData, setShowParsedData] = useState(false);
+  
+  // Bank accounts state (multiple accounts)
+  const bankLetterInputRef = useRef<HTMLInputElement>(null);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [loadingBankAccounts, setLoadingBankAccounts] = useState(true);
+  const [uploadingBankLetter, setUploadingBankLetter] = useState(false);
+  const [parsingBankLetter, setParsingBankLetter] = useState(false);
+  const [parsedBankData, setParsedBankData] = useState<ParsedBankLetter | null>(null);
+  const [showParsedBankData, setShowParsedBankData] = useState(false);
+  const [pendingBankLetterUrl, setPendingBankLetterUrl] = useState<string | null>(null);
+  const [savingBankAccount, setSavingBankAccount] = useState(false);
 
   // Load settings on mount
   useEffect(() => {
@@ -139,6 +169,11 @@ export default function SettingsPage() {
             bank_account: data.bank_account || "",
             bank_bic: data.bank_bic || "",
             bank_correspondent_account: data.bank_correspondent_account || "",
+            bank_letter_url: data.bank_letter_url || "",
+            bank_address: data.bank_address || "",
+            bank_country: data.bank_country || "Bahrain",
+            account_currency: data.account_currency || "BHD",
+            account_holder_name: data.account_holder_name || "",
             logo_url: data.logo_url || "",
             cr_certificate_url: data.cr_certificate_url || "",
             invoice_prefix: data.invoice_prefix || "INV",
@@ -157,6 +192,39 @@ export default function SettingsPage() {
 
     loadSettings();
   }, [user]);
+
+  // Load bank accounts (after settingsId is loaded)
+  useEffect(() => {
+    async function loadBankAccounts() {
+      if (!user || !settingsId) return;
+
+      try {
+        const supabase = createClient();
+        const { data, error } = await supabase
+          .from("bank_accounts")
+          .select("*")
+          .eq("company_id", settingsId)  // Filter by company
+          .eq("is_active", true)
+          .order("is_primary", { ascending: false })
+          .order("created_at", { ascending: false });
+
+        if (error) {
+          console.error("Error loading bank accounts:", error);
+          return;
+        }
+
+        if (data) {
+          setBankAccounts(data as BankAccount[]);
+        }
+      } catch (err) {
+        console.error("Error:", err);
+      } finally {
+        setLoadingBankAccounts(false);
+      }
+    }
+
+    loadBankAccounts();
+  }, [user, settingsId]);
 
   const handleInputChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
@@ -408,6 +476,196 @@ export default function SettingsPage() {
       alert("Data applied to form but failed to auto-save. Please click Save manually.");
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  // Bank letter upload and parsing
+  const handleBankLetterUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user?.id) return;
+
+    setUploadingBankLetter(true);
+    setParsingBankLetter(true);
+    setPendingBankLetterUrl(null);
+
+    try {
+      // First, parse the PDF
+      const formData = new FormData();
+      formData.append("file", file);
+
+      console.log("Uploading bank letter for parsing:", file.name, file.size);
+
+      const parseResponse = await fetch("/api/parse-bank-letter", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!parseResponse.ok) {
+        const errorData = await parseResponse.json().catch(() => ({}));
+        console.error("Parse API error:", parseResponse.status, errorData);
+        throw new Error(errorData.error || "Failed to parse bank letter");
+      }
+
+      const parseResult = await parseResponse.json();
+      console.log("Bank letter parse result:", parseResult);
+      
+      if (!parseResult.parsed || (!parseResult.parsed.bank_name && !parseResult.parsed.bank_account)) {
+        console.warn("No data extracted from bank letter. Raw text:", parseResult.rawText?.substring(0, 500));
+        alert("Could not extract data from this document. Please check that it's a valid bank letter.");
+        return;
+      }
+
+      // Check if IBAN already exists
+      const existingAccount = bankAccounts.find(
+        acc => acc.iban === parseResult.parsed.bank_account
+      );
+      
+      if (existingAccount) {
+        alert(`This IBAN (${parseResult.parsed.bank_account}) already exists in your accounts.`);
+        return;
+      }
+      
+      setParsedBankData(parseResult.parsed);
+      setShowParsedBankData(true);
+      setParsingBankLetter(false);
+
+      // Upload to Supabase Storage
+      const supabase = createClient();
+      const timestamp = Date.now();
+      const fileExt = file.name.split(".").pop()?.toLowerCase();
+      const filePath = `company/${user.id}/bank/${timestamp}_bank_letter.${fileExt}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("erpfiles")
+        .upload(filePath, file, { upsert: false });
+
+      if (uploadError) {
+        console.warn("Storage upload failed:", uploadError);
+      } else {
+        const { data: urlData } = supabase.storage
+          .from("erpfiles")
+          .getPublicUrl(filePath);
+
+        setPendingBankLetterUrl(urlData.publicUrl);
+      }
+    } catch (err) {
+      console.error("Error processing bank letter:", err);
+      alert("Error processing bank letter");
+    } finally {
+      setUploadingBankLetter(false);
+      setParsingBankLetter(false);
+    }
+  };
+
+  const applyParsedBankData = async () => {
+    if (!parsedBankData || !user?.id || !parsedBankData.bank_account || !settingsId) {
+      alert("No IBAN found in parsed data or company not set up");
+      return;
+    }
+
+    setSavingBankAccount(true);
+    setShowParsedBankData(false);
+
+    try {
+      const supabase = createClient();
+      
+      // Create new bank account linked to company
+      const newAccount: InsertBankAccount = {
+        company_id: settingsId,  // Link to company_settings
+        user_id: user.id,        // For RLS
+        bank_name: parsedBankData.bank_name,
+        iban: parsedBankData.bank_account,          // Mapped from parser
+        swift_bic: parsedBankData.bank_bic,         // Mapped from parser
+        bank_address: parsedBankData.bank_address,
+        bank_country: parsedBankData.bank_country || "Bahrain",
+        account_currency: parsedBankData.account_currency || "BHD",
+        account_holder_name: parsedBankData.account_holder_name,
+        bank_letter_url: pendingBankLetterUrl,
+        is_primary: bankAccounts.length === 0, // First account is primary
+      };
+
+      const { data, error } = await supabase
+        .from("bank_accounts")
+        .insert(newAccount)
+        .select()
+        .single();
+
+      if (error) {
+        if (error.code === "23505") { // Unique constraint violation
+          alert("This IBAN already exists in your accounts.");
+        } else {
+          throw error;
+        }
+        return;
+      }
+
+      if (data) {
+        setBankAccounts(prev => [data as BankAccount, ...prev]);
+        setSaveSuccess(true);
+        setTimeout(() => setSaveSuccess(false), 2000);
+      }
+
+      // Clear parsed data
+      setParsedBankData(null);
+      setPendingBankLetterUrl(null);
+    } catch (err) {
+      console.error("Error saving bank account:", err);
+      alert("Failed to save bank account");
+    } finally {
+      setSavingBankAccount(false);
+    }
+  };
+
+  // Set bank account as primary
+  const setPrimaryBankAccount = async (accountId: string) => {
+    if (!user?.id || !settingsId) return;
+
+    try {
+      const supabase = createClient();
+      
+      // The trigger will automatically unset other primary accounts
+      const { error } = await supabase
+        .from("bank_accounts")
+        .update({ is_primary: true, updated_at: new Date().toISOString() })
+        .eq("id", accountId)
+        .eq("company_id", settingsId);  // Extra safety check
+
+      if (error) throw error;
+
+      // Update local state
+      setBankAccounts(prev => prev.map(acc => ({
+        ...acc,
+        is_primary: acc.id === accountId,
+      })));
+    } catch (err) {
+      console.error("Error setting primary account:", err);
+      alert("Failed to set primary account");
+    }
+  };
+
+  // Delete bank account
+  const deleteBankAccount = async (accountId: string) => {
+    if (!user?.id) return;
+
+    if (!confirm("Are you sure you want to delete this bank account?")) {
+      return;
+    }
+
+    try {
+      const supabase = createClient();
+      
+      const { error } = await supabase
+        .from("bank_accounts")
+        .delete()
+        .eq("id", accountId);
+
+      if (error) throw error;
+
+      // Update local state
+      setBankAccounts(prev => prev.filter(acc => acc.id !== accountId));
+    } catch (err) {
+      console.error("Error deleting bank account:", err);
+      alert("Failed to delete bank account");
     }
   };
 
@@ -832,56 +1090,234 @@ export default function SettingsPage() {
 
         {/* Bank Tab */}
         <TabsContent value="bank" className="space-y-4">
+          {/* Add New Bank Account */}
           <Card>
             <CardHeader>
-              <CardTitle>Bank Details</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                <Plus className="h-5 w-5" />
+                Add Bank Account
+              </CardTitle>
               <CardDescription>
-                Bank account information for receiving payments
+                Upload a bank letter or statement to automatically extract account details
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="bank_name">Bank Name</Label>
-                <Input
-                  id="bank_name"
-                  name="bank_name"
-                  value={settings.bank_name || ""}
-                  onChange={handleInputChange}
-                  placeholder="National Bank of Bahrain"
+              <div className="flex items-center gap-4">
+                <input
+                  type="file"
+                  ref={bankLetterInputRef}
+                  onChange={handleBankLetterUpload}
+                  accept=".pdf"
+                  className="hidden"
                 />
+                <Button
+                  variant="outline"
+                  onClick={() => bankLetterInputRef.current?.click()}
+                  disabled={uploadingBankLetter || savingBankAccount}
+                  className="gap-2"
+                >
+                  {uploadingBankLetter ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Upload className="h-4 w-4" />
+                  )}
+                  {parsingBankLetter ? "Parsing..." : "Upload Bank Letter (PDF)"}
+                </Button>
               </div>
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="bank_account">Account Number / IBAN</Label>
-                  <Input
-                    id="bank_account"
-                    name="bank_account"
-                    value={settings.bank_account || ""}
-                    onChange={handleInputChange}
-                    placeholder="BH00XXXX00001234567890"
-                  />
+              <p className="text-xs text-muted-foreground">
+                Supported: Bank letters, account confirmation letters, IBAN certificates (PDF).
+                Each unique IBAN will be saved as a separate account.
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* Parsed Bank Data Modal */}
+          {showParsedBankData && parsedBankData && (
+            <Card className="border-primary/50 bg-primary/5">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-5 w-5 text-primary" />
+                    <CardTitle className="text-lg">New Bank Account Detected</CardTitle>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                      setShowParsedBankData(false);
+                      setParsedBankData(null);
+                      setPendingBankLetterUrl(null);
+                    }}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="bank_bic">SWIFT / BIC Code</Label>
-                  <Input
-                    id="bank_bic"
-                    name="bank_bic"
-                    value={settings.bank_bic || ""}
-                    onChange={handleInputChange}
-                    placeholder="NABORHBM"
-                  />
+                <CardDescription>
+                  Review extracted data and save as a new bank account
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="grid gap-2 text-sm">
+                  {parsedBankData.bank_name && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Bank Name:</span>
+                      <span className="font-medium">{parsedBankData.bank_name}</span>
+                    </div>
+                  )}
+                  {parsedBankData.bank_account && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">IBAN:</span>
+                      <span className="font-medium font-mono text-sm">{parsedBankData.bank_account}</span>
+                    </div>
+                  )}
+                  {parsedBankData.bank_bic && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">SWIFT/BIC:</span>
+                      <span className="font-medium font-mono">{parsedBankData.bank_bic}</span>
+                    </div>
+                  )}
+                  {parsedBankData.account_holder_name && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Account Holder:</span>
+                      <span className="font-medium">{parsedBankData.account_holder_name}</span>
+                    </div>
+                  )}
+                  {parsedBankData.account_currency && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Currency:</span>
+                      <span className="font-medium">{parsedBankData.account_currency}</span>
+                    </div>
+                  )}
+                  {parsedBankData.bank_country && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Country:</span>
+                      <span className="font-medium">{parsedBankData.bank_country}</span>
+                    </div>
+                  )}
                 </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="bank_correspondent_account">Correspondent Account (Optional)</Label>
-                <Input
-                  id="bank_correspondent_account"
-                  name="bank_correspondent_account"
-                  value={settings.bank_correspondent_account || ""}
-                  onChange={handleInputChange}
-                  placeholder="For international transfers"
-                />
-              </div>
+                <div className="flex gap-2 pt-2">
+                  <Button 
+                    onClick={applyParsedBankData} 
+                    className="flex-1"
+                    disabled={savingBankAccount || !parsedBankData.bank_account}
+                  >
+                    {savingBankAccount ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Check className="mr-2 h-4 w-4" />
+                    )}
+                    Save Bank Account
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    onClick={() => {
+                      setShowParsedBankData(false);
+                      setParsedBankData(null);
+                      setPendingBankLetterUrl(null);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Bank Accounts List */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Your Bank Accounts</CardTitle>
+              <CardDescription>
+                {bankAccounts.length === 0 
+                  ? "No bank accounts yet. Upload a bank letter to add one."
+                  : `${bankAccounts.length} account${bankAccounts.length > 1 ? 's' : ''} configured. Primary account is used on invoices.`
+                }
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loadingBankAccounts ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : bankAccounts.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <CreditCard className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                  <p>No bank accounts added yet</p>
+                  <p className="text-sm">Upload a bank letter above to get started</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {bankAccounts.map((account) => (
+                    <div 
+                      key={account.id} 
+                      className={`p-4 rounded-lg border ${account.is_primary ? 'border-primary bg-primary/5' : 'bg-muted/30'}`}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold">{account.bank_name || "Unknown Bank"}</span>
+                            {account.is_primary && (
+                              <Badge variant="default" className="text-xs">
+                                <Star className="h-3 w-3 mr-1" />
+                                Primary
+                              </Badge>
+                            )}
+                            {account.account_currency && (
+                              <Badge variant="outline" className="text-xs">
+                                {account.account_currency}
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="font-mono text-sm text-muted-foreground">
+                            {account.iban}
+                          </p>
+                          {account.swift_bic && (
+                            <p className="text-xs text-muted-foreground">
+                              SWIFT: {account.swift_bic}
+                            </p>
+                          )}
+                          {account.account_holder_name && (
+                            <p className="text-xs text-muted-foreground">
+                              Holder: {account.account_holder_name}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {account.bank_letter_url && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => window.open(account.bank_letter_url!, "_blank")}
+                              title="View document"
+                            >
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                          )}
+                          {!account.is_primary && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setPrimaryBankAccount(account.id)}
+                              title="Set as primary"
+                            >
+                              <Star className="h-4 w-4" />
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => deleteBankAccount(account.id)}
+                            title="Delete account"
+                            className="text-destructive hover:text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

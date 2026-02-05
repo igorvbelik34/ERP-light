@@ -9,6 +9,75 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      bank_accounts: {
+        Row: {
+          id: string;
+          company_id: string;          // FK to company_settings
+          user_id: string;             // Denormalized for RLS
+          bank_name: string | null;
+          iban: string;                // Renamed from bank_account
+          swift_bic: string | null;    // Renamed from bank_bic
+          account_holder_name: string | null;
+          account_currency: string | null;
+          bank_address: string | null;
+          bank_country: string | null;
+          bank_letter_url: string | null;
+          is_primary: boolean;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          company_id: string;
+          user_id: string;
+          bank_name?: string | null;
+          iban: string;
+          swift_bic?: string | null;
+          account_holder_name?: string | null;
+          account_currency?: string | null;
+          bank_address?: string | null;
+          bank_country?: string | null;
+          bank_letter_url?: string | null;
+          is_primary?: boolean;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          company_id?: string;
+          user_id?: string;
+          bank_name?: string | null;
+          iban?: string;
+          swift_bic?: string | null;
+          account_holder_name?: string | null;
+          account_currency?: string | null;
+          bank_address?: string | null;
+          bank_country?: string | null;
+          bank_letter_url?: string | null;
+          is_primary?: boolean;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "bank_accounts_company_id_fkey";
+            columns: ["company_id"];
+            isOneToOne: false;
+            referencedRelation: "company_settings";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "bank_accounts_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       profiles: {
         Row: {
           id: string;
@@ -237,6 +306,11 @@ export type Database = {
           bank_account: string | null;
           bank_bic: string | null;
           bank_correspondent_account: string | null;
+          bank_letter_url: string | null;
+          bank_address: string | null;
+          bank_country: string | null;
+          account_currency: string | null;
+          account_holder_name: string | null;
           logo_url: string | null;
           cr_certificate_url: string | null;
           invoice_prefix: string;
@@ -267,6 +341,11 @@ export type Database = {
           bank_account?: string | null;
           bank_bic?: string | null;
           bank_correspondent_account?: string | null;
+          bank_letter_url?: string | null;
+          bank_address?: string | null;
+          bank_country?: string | null;
+          account_currency?: string | null;
+          account_holder_name?: string | null;
           logo_url?: string | null;
           cr_certificate_url?: string | null;
           invoice_prefix?: string;
@@ -297,6 +376,11 @@ export type Database = {
           bank_account?: string | null;
           bank_bic?: string | null;
           bank_correspondent_account?: string | null;
+          bank_letter_url?: string | null;
+          bank_address?: string | null;
+          bank_country?: string | null;
+          account_currency?: string | null;
+          account_holder_name?: string | null;
           logo_url?: string | null;
           cr_certificate_url?: string | null;
           invoice_prefix?: string;
@@ -349,6 +433,7 @@ export type Client = Tables<"clients">;
 export type Invoice = Tables<"invoices">;
 export type InvoiceItem = Tables<"invoice_items">;
 export type CompanySettings = Tables<"company_settings">;
+export type BankAccount = Tables<"bank_accounts">;
 
 export type InsertClient = InsertTables<"clients">;
 export type UpdateClient = UpdateTables<"clients">;
@@ -358,3 +443,5 @@ export type InsertInvoiceItem = InsertTables<"invoice_items">;
 export type UpdateInvoiceItem = UpdateTables<"invoice_items">;
 export type InsertCompanySettings = InsertTables<"company_settings">;
 export type UpdateCompanySettings = UpdateTables<"company_settings">;
+export type InsertBankAccount = InsertTables<"bank_accounts">;
+export type UpdateBankAccount = UpdateTables<"bank_accounts">;
