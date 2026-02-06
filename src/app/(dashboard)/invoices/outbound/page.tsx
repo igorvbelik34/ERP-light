@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -181,64 +181,57 @@ export default function OutboundInvoicesPage() {
   const [isCreatingCreditNote, setIsCreatingCreditNote] = useState(false);
   const [nextInvoiceNumberPreview, setNextInvoiceNumberPreview] = useState("");
 
-  // Load data
+  // Load data - parallel queries for performance
   const loadData = useCallback(async () => {
     if (!user) return;
 
     try {
       const supabase = createClient();
 
-      // Load invoices with client info (including deleted for audit trail)
-      const { data: invoicesData, error: invoicesError } = await supabase
-        .from("invoices")
-        .select("*")
-        .eq("type", "outbound")
-        .order("created_at", { ascending: false });
-
-      if (invoicesError) throw invoicesError;
-
-      // Load clients
-      const { data: clientsData, error: clientsError } = await supabase
-        .from("clients")
-        .select("*")
-        .in("type", ["customer", "both"])
-        .order("name");
-
-      if (clientsError) throw clientsError;
-
-      // Load company settings
-      const { data: settingsData } = await supabase
-        .from("company_settings")
-        .select("*")
-        .limit(1)
-        .single();
-
-      // Load bank accounts (for currency selection)
-      const { data: bankAccountsData } = await supabase
-        .from("bank_accounts")
-        .select("*")
-        .eq("is_active", true)
-        .order("is_primary", { ascending: false });
-
-      // Get preview of next invoice number from DB
-      const { data: previewData } = await supabase
-        .rpc("preview_next_invoice_number", { 
+      // Execute all queries in parallel
+      const [invoicesResult, clientsResult, settingsResult, bankAccountsResult, previewResult] = await Promise.all([
+        supabase
+          .from("invoices")
+          .select("*")
+          .eq("type", "outbound")
+          .order("created_at", { ascending: false })
+          .limit(200),
+        supabase
+          .from("clients")
+          .select("*")
+          .in("type", ["customer", "both"])
+          .order("name"),
+        supabase
+          .from("company_settings")
+          .select("*")
+          .limit(1)
+          .single(),
+        supabase
+          .from("bank_accounts")
+          .select("*")
+          .eq("is_active", true)
+          .order("is_primary", { ascending: false }),
+        supabase.rpc("preview_next_invoice_number", {
           p_user_id: user.id,
-          p_document_type: "invoice" 
-        });
+          p_document_type: "invoice"
+        }),
+      ]);
+
+      if (invoicesResult.error) throw invoicesResult.error;
+      if (clientsResult.error) throw clientsResult.error;
 
       // Map clients to invoices
-      const clientsMap = new Map(clientsData?.map((c) => [c.id, c]) ?? []);
-      const invoicesWithClients = (invoicesData ?? []).map((inv) => ({
+      const clientsMap = new Map(clientsResult.data?.map((c) => [c.id, c]) ?? []);
+      const invoicesWithClients = (invoicesResult.data ?? []).map((inv) => ({
         ...inv,
         client: clientsMap.get(inv.client_id),
       }));
 
       setInvoices(invoicesWithClients);
-      setClients(clientsData ?? []);
-      setCompanySettings(settingsData);
-      setBankAccounts(bankAccountsData ?? []);
-      setNextInvoiceNumberPreview(previewData || "");
+      setClients(clientsResult.data ?? []);
+      setCompanySettings(settingsResult.data);
+      setBankAccounts(bankAccountsResult.data ?? []);
+      setNextInvoiceNumberPreview(previewResult.data || "");
     } catch (err) {
       console.error("Error loading data:", err);
     } finally {
@@ -250,43 +243,51 @@ export default function OutboundInvoicesPage() {
     loadData();
   }, [loadData]);
 
-  // Filter and search invoices
-  const filteredInvoices = invoices.filter((invoice) => {
-    const matchesSearch =
-      invoice.invoice_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      invoice.client?.name.toLowerCase().includes(searchQuery.toLowerCase());
+  // Filter and search invoices - memoized
+  const filteredInvoices = useMemo(() => {
+    return invoices.filter((invoice) => {
+      const matchesSearch =
+        invoice.invoice_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        invoice.client?.name?.toLowerCase().includes(searchQuery.toLowerCase());
 
-    // Handle deleted filter separately
-    if (filterStatus === "deleted") {
-      return matchesSearch && invoice.is_deleted;
-    }
+      if (filterStatus === "deleted") {
+        return matchesSearch && invoice.is_deleted;
+      }
 
-    // For other statuses, exclude deleted invoices unless showing "all"
-    const matchesStatus = filterStatus === "all" || invoice.status === filterStatus;
-    const notDeleted = filterStatus === "all" ? true : !invoice.is_deleted;
+      const matchesStatus = filterStatus === "all" || invoice.status === filterStatus;
+      const notDeleted = filterStatus === "all" ? true : !invoice.is_deleted;
 
-    return matchesSearch && matchesStatus && notDeleted;
-  });
+      return matchesSearch && matchesStatus && notDeleted;
+    });
+  }, [invoices, searchQuery, filterStatus]);
 
-  // Calculate totals
-  const calculateSubtotal = () => {
-    return formData.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0);
-  };
+  // Memoized summary stats
+  const invoiceStats = useMemo(() => {
+    const active = invoices.filter((i) => !i.is_deleted);
+    return {
+      totalActive: active.length,
+      draft: active.filter((i) => i.status === "draft").length,
+      outstanding: active.filter((i) => i.status === "sent" || i.status === "overdue").length,
+      paid: active.filter((i) => i.status === "paid").length,
+      deleted: invoices.filter((i) => i.is_deleted).length,
+    };
+  }, [invoices]);
 
-  const calculateTax = () => {
-    return calculateSubtotal() * (formData.tax_rate / 100);
-  };
+  // Calculate totals - memoized
+  const formTotals = useMemo(() => {
+    const subtotal = formData.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0);
+    const tax = subtotal * (formData.tax_rate / 100);
+    return { subtotal, tax, total: subtotal + tax };
+  }, [formData.items, formData.tax_rate]);
 
-  const calculateTotal = () => {
-    return calculateSubtotal() + calculateTax();
-  };
-
-  // Get unique currencies from bank accounts
-  const availableCurrencies = Array.from(new Set(
-    bankAccounts
-      .filter(a => a.account_currency)
-      .map(a => a.account_currency!)
-  ));
+  // Get unique currencies from bank accounts - memoized
+  const availableCurrencies = useMemo(() => {
+    return Array.from(new Set(
+      bankAccounts
+        .filter(a => a.account_currency)
+        .map(a => a.account_currency!)
+    ));
+  }, [bankAccounts]);
 
   // Open dialog for new invoice
   const handleNewInvoice = () => {
@@ -962,44 +963,36 @@ export default function OutboundInvoicesPage() {
         </div>
       )}
 
-      {/* Summary Stats */}
+      {/* Summary Stats - using memoized values */}
       <div className="grid gap-4 md:grid-cols-5">
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Total Active</CardDescription>
-            <CardTitle className="text-2xl">{invoices.filter((i) => !i.is_deleted).length}</CardTitle>
+            <CardTitle className="text-2xl">{invoiceStats.totalActive}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Draft</CardDescription>
-            <CardTitle className="text-2xl">
-              {invoices.filter((i) => i.status === "draft" && !i.is_deleted).length}
-            </CardTitle>
+            <CardTitle className="text-2xl">{invoiceStats.draft}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Outstanding</CardDescription>
-            <CardTitle className="text-2xl">
-              {invoices.filter((i) => (i.status === "sent" || i.status === "overdue") && !i.is_deleted).length}
-            </CardTitle>
+            <CardTitle className="text-2xl">{invoiceStats.outstanding}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Paid</CardDescription>
-            <CardTitle className="text-2xl text-emerald-600">
-              {invoices.filter((i) => i.status === "paid" && !i.is_deleted).length}
-            </CardTitle>
+            <CardTitle className="text-2xl text-emerald-600">{invoiceStats.paid}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Deleted</CardDescription>
-            <CardTitle className="text-2xl text-muted-foreground">
-              {invoices.filter((i) => i.is_deleted).length}
-            </CardTitle>
+            <CardTitle className="text-2xl text-muted-foreground">{invoiceStats.deleted}</CardTitle>
           </CardHeader>
         </Card>
       </div>
@@ -1179,15 +1172,15 @@ export default function OutboundInvoicesPage() {
               <div className="border-t pt-4 space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Subtotal</span>
-                  <span>{formatCurrency(calculateSubtotal(), formData.currency)}</span>
+                  <span>{formatCurrency(formTotals.subtotal, formData.currency)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">VAT ({formData.tax_rate}%)</span>
-                  <span>{formatCurrency(calculateTax(), formData.currency)}</span>
+                  <span>{formatCurrency(formTotals.tax, formData.currency)}</span>
                 </div>
                 <div className="flex justify-between font-medium text-lg border-t pt-2">
                   <span>Total</span>
-                  <span>{formatCurrency(calculateTotal(), formData.currency)}</span>
+                  <span>{formatCurrency(formTotals.total, formData.currency)}</span>
                 </div>
               </div>
             </div>

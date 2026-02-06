@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -160,56 +160,52 @@ export default function InboundInvoicesPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Load data
+  // Load data - parallel queries for performance
   const loadData = useCallback(async () => {
     if (!user) return;
 
     try {
       const supabase = createClient();
 
-      // Load inbound invoices
-      const { data: invoicesData, error: invoicesError } = await supabase
-        .from("invoices")
-        .select("*")
-        .eq("type", "inbound")
-        .order("created_at", { ascending: false });
+      // Execute all queries in parallel
+      const [invoicesResult, suppliersResult, settingsResult, bankAccountsResult] = await Promise.all([
+        supabase
+          .from("invoices")
+          .select("*")
+          .eq("type", "inbound")
+          .order("created_at", { ascending: false })
+          .limit(200),
+        supabase
+          .from("clients")
+          .select("*")
+          .in("type", ["supplier", "both"])
+          .order("name"),
+        supabase
+          .from("company_settings")
+          .select("*")
+          .limit(1)
+          .single(),
+        supabase
+          .from("bank_accounts")
+          .select("*")
+          .eq("is_active", true)
+          .order("is_primary", { ascending: false }),
+      ]);
 
-      if (invoicesError) throw invoicesError;
-
-      // Load suppliers (type = supplier or both)
-      const { data: suppliersData, error: suppliersError } = await supabase
-        .from("clients")
-        .select("*")
-        .in("type", ["supplier", "both"])
-        .order("name");
-
-      if (suppliersError) throw suppliersError;
-
-      // Load company settings
-      const { data: settingsData } = await supabase
-        .from("company_settings")
-        .select("*")
-        .limit(1)
-        .single();
-
-      // Load bank accounts (for currency selection)
-      const { data: bankAccountsData } = await supabase
-        .from("bank_accounts")
-        .select("*")
-        .eq("is_active", true)
-        .order("is_primary", { ascending: false });
+      if (invoicesResult.error) throw invoicesResult.error;
+      if (suppliersResult.error) throw suppliersResult.error;
 
       // Map suppliers to invoices
-      const suppliersMap = new Map(suppliersData?.map((s) => [s.id, s]) ?? []);
-      const invoicesWithSuppliers = (invoicesData ?? []).map((inv) => ({
+      const suppliersMap = new Map(suppliersResult.data?.map((s) => [s.id, s]) ?? []);
+      const invoicesWithSuppliers = (invoicesResult.data ?? []).map((inv) => ({
         ...inv,
         client: suppliersMap.get(inv.client_id),
       }));
 
       setInvoices(invoicesWithSuppliers);
-      setSuppliers(suppliersData ?? []);
-      setCompanySettings(settingsData);
-      setBankAccounts(bankAccountsData ?? []);
+      setSuppliers(suppliersResult.data ?? []);
+      setCompanySettings(settingsResult.data);
+      setBankAccounts(bankAccountsResult.data ?? []);
     } catch (err) {
       console.error("Error loading data:", err);
     } finally {
@@ -221,41 +217,53 @@ export default function InboundInvoicesPage() {
     loadData();
   }, [loadData]);
 
-  // Filter and search invoices
-  const filteredInvoices = invoices.filter((invoice) => {
-    const matchesSearch =
-      invoice.invoice_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      invoice.client?.name.toLowerCase().includes(searchQuery.toLowerCase());
+  // Filter and search invoices - memoized
+  const filteredInvoices = useMemo(() => {
+    return invoices.filter((invoice) => {
+      const matchesSearch =
+        invoice.invoice_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        invoice.client?.name?.toLowerCase().includes(searchQuery.toLowerCase());
 
-    if (filterStatus === "deleted") {
-      return matchesSearch && invoice.is_deleted;
-    }
+      if (filterStatus === "deleted") {
+        return matchesSearch && invoice.is_deleted;
+      }
 
-    const matchesStatus = filterStatus === "all" || invoice.status === filterStatus;
-    const notDeleted = filterStatus === "all" ? true : !invoice.is_deleted;
+      const matchesStatus = filterStatus === "all" || invoice.status === filterStatus;
+      const notDeleted = filterStatus === "all" ? true : !invoice.is_deleted;
 
-    return matchesSearch && matchesStatus && notDeleted;
-  });
+      return matchesSearch && matchesStatus && notDeleted;
+    });
+  }, [invoices, searchQuery, filterStatus]);
 
-  // Calculate totals
-  const calculateSubtotal = () => {
-    return formData.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0);
-  };
+  // Memoized summary stats
+  const invoiceStats = useMemo(() => {
+    const active = invoices.filter((i) => !i.is_deleted);
+    return {
+      totalActive: active.length,
+      pending: active.filter((i) => i.status === "draft").length,
+      outstanding: active.filter((i) => i.status === "sent" || i.status === "overdue").length,
+      paid: active.filter((i) => i.status === "paid").length,
+      totalDue: active
+        .filter((i) => i.status === "draft" || i.status === "sent" || i.status === "overdue")
+        .reduce((sum, i) => sum + (i.total_bhd || i.total), 0),
+    };
+  }, [invoices]);
 
-  const calculateTax = () => {
-    return calculateSubtotal() * (formData.tax_rate / 100);
-  };
+  // Calculate totals - memoized
+  const formTotals = useMemo(() => {
+    const subtotal = formData.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0);
+    const tax = subtotal * (formData.tax_rate / 100);
+    return { subtotal, tax, total: subtotal + tax };
+  }, [formData.items, formData.tax_rate]);
 
-  const calculateTotal = () => {
-    return calculateSubtotal() + calculateTax();
-  };
-
-  // Get unique currencies from bank accounts
-  const availableCurrencies = Array.from(new Set(
-    bankAccounts
-      .filter(a => a.account_currency)
-      .map(a => a.account_currency!)
-  ));
+  // Get unique currencies from bank accounts - memoized
+  const availableCurrencies = useMemo(() => {
+    return Array.from(new Set(
+      bankAccounts
+        .filter(a => a.account_currency)
+        .map(a => a.account_currency!)
+    ));
+  }, [bankAccounts]);
 
   // Open dialog for new invoice
   const handleNewInvoice = () => {
@@ -722,48 +730,37 @@ export default function InboundInvoicesPage() {
         </div>
       )}
 
-      {/* Summary Stats */}
+      {/* Summary Stats - using memoized values */}
       <div className="grid gap-4 md:grid-cols-5">
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Total Active</CardDescription>
-            <CardTitle className="text-2xl">{invoices.filter((i) => !i.is_deleted).length}</CardTitle>
+            <CardTitle className="text-2xl">{invoiceStats.totalActive}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Pending</CardDescription>
-            <CardTitle className="text-2xl">
-              {invoices.filter((i) => i.status === "draft" && !i.is_deleted).length}
-            </CardTitle>
+            <CardTitle className="text-2xl">{invoiceStats.pending}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Outstanding</CardDescription>
-            <CardTitle className="text-2xl">
-              {invoices.filter((i) => (i.status === "sent" || i.status === "overdue") && !i.is_deleted).length}
-            </CardTitle>
+            <CardTitle className="text-2xl">{invoiceStats.outstanding}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Paid</CardDescription>
-            <CardTitle className="text-2xl text-emerald-600">
-              {invoices.filter((i) => i.status === "paid" && !i.is_deleted).length}
-            </CardTitle>
+            <CardTitle className="text-2xl text-emerald-600">{invoiceStats.paid}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Total Due</CardDescription>
             <CardTitle className="text-xl text-red-600">
-              {formatCurrency(
-                invoices
-                  .filter((i) => (i.status === "draft" || i.status === "sent" || i.status === "overdue") && !i.is_deleted)
-                  .reduce((sum, i) => sum + (i.total_bhd || i.total), 0),
-                "BHD"
-              )}
+              {formatCurrency(invoiceStats.totalDue, "BHD")}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -947,15 +944,15 @@ export default function InboundInvoicesPage() {
               <div className="border-t pt-4 space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Subtotal</span>
-                  <span>{formatCurrency(calculateSubtotal(), formData.currency)}</span>
+                  <span>{formatCurrency(formTotals.subtotal, formData.currency)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">VAT ({formData.tax_rate}%)</span>
-                  <span>{formatCurrency(calculateTax(), formData.currency)}</span>
+                  <span>{formatCurrency(formTotals.tax, formData.currency)}</span>
                 </div>
                 <div className="flex justify-between font-medium text-lg border-t pt-2">
                   <span>Total</span>
-                  <span>{formatCurrency(calculateTotal(), formData.currency)}</span>
+                  <span>{formatCurrency(formTotals.total, formData.currency)}</span>
                 </div>
               </div>
             </div>
