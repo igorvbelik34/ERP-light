@@ -57,17 +57,20 @@ CREATE INDEX IF NOT EXISTS idx_company_settings_user_id ON company_settings(user
 ALTER TABLE company_settings ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies
+DROP POLICY IF EXISTS "Users can view their own company settings" ON company_settings;
 CREATE POLICY "Users can view their own company settings"
   ON company_settings FOR SELECT
-  USING (auth.uid() = user_id);
+  USING (auth.uid() = user_id::uuid);
 
+DROP POLICY IF EXISTS "Users can create their own company settings" ON company_settings;
 CREATE POLICY "Users can create their own company settings"
   ON company_settings FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
+  WITH CHECK (auth.uid() = user_id::uuid);
 
+DROP POLICY IF EXISTS "Users can update their own company settings" ON company_settings;
 CREATE POLICY "Users can update their own company settings"
   ON company_settings FOR UPDATE
-  USING (auth.uid() = user_id);
+  USING (auth.uid() = user_id::uuid);
 
 -- Auto-update updated_at trigger
 CREATE TRIGGER update_company_settings_updated_at

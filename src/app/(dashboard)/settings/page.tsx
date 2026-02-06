@@ -69,6 +69,8 @@ const defaultSettings: SettingsFormData = {
   cr_certificate_url: "",
   invoice_prefix: "INV",
   invoice_next_number: 1,
+  credit_note_prefix: "CN",
+  credit_note_next_number: 1,
   default_tax_rate: 0,
   default_payment_terms: 14,
   invoice_notes: "",
@@ -178,6 +180,8 @@ export default function SettingsPage() {
             cr_certificate_url: data.cr_certificate_url || "",
             invoice_prefix: data.invoice_prefix || "INV",
             invoice_next_number: data.invoice_next_number || 1,
+            credit_note_prefix: data.credit_note_prefix || "CN",
+            credit_note_next_number: data.credit_note_next_number || 1,
             default_tax_rate: data.default_tax_rate || 0,
             default_payment_terms: data.default_payment_terms || 14,
             invoice_notes: data.invoice_notes || "",
@@ -1354,6 +1358,32 @@ export default function SettingsPage() {
                     type="number"
                     min="1"
                     value={settings.invoice_next_number || 1}
+                    onChange={handleInputChange}
+                  />
+                </div>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="credit_note_prefix">Credit Note Prefix</Label>
+                  <Input
+                    id="credit_note_prefix"
+                    name="credit_note_prefix"
+                    value={settings.credit_note_prefix || ""}
+                    onChange={handleInputChange}
+                    placeholder="CN"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Example: {settings.credit_note_prefix || "CN"}-2026-0001
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="credit_note_next_number">Next Credit Note Number</Label>
+                  <Input
+                    id="credit_note_next_number"
+                    name="credit_note_next_number"
+                    type="number"
+                    min="1"
+                    value={settings.credit_note_next_number || 1}
                     onChange={handleInputChange}
                   />
                 </div>

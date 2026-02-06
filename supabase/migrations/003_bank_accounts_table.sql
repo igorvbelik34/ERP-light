@@ -65,21 +65,25 @@ CREATE INDEX IF NOT EXISTS bank_accounts_user_id_idx ON bank_accounts(user_id);
 ALTER TABLE bank_accounts ENABLE ROW LEVEL SECURITY;
 
 -- Users can only see bank accounts of their companies
+DROP POLICY IF EXISTS "Users can view own bank accounts" ON bank_accounts;
 CREATE POLICY "Users can view own bank accounts"
 ON bank_accounts FOR SELECT
-USING (auth.uid() = user_id);
+USING (auth.uid() = user_id::uuid);
 
+DROP POLICY IF EXISTS "Users can insert own bank accounts" ON bank_accounts;
 CREATE POLICY "Users can insert own bank accounts"
 ON bank_accounts FOR INSERT
-WITH CHECK (auth.uid() = user_id);
+WITH CHECK (auth.uid() = user_id::uuid);
 
+DROP POLICY IF EXISTS "Users can update own bank accounts" ON bank_accounts;
 CREATE POLICY "Users can update own bank accounts"
 ON bank_accounts FOR UPDATE
-USING (auth.uid() = user_id);
+USING (auth.uid() = user_id::uuid);
 
+DROP POLICY IF EXISTS "Users can delete own bank accounts" ON bank_accounts;
 CREATE POLICY "Users can delete own bank accounts"
 ON bank_accounts FOR DELETE
-USING (auth.uid() = user_id);
+USING (auth.uid() = user_id::uuid);
 
 -- ============================================
 -- STEP 4: Trigger for single primary account

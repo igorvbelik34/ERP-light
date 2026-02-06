@@ -6,6 +6,9 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[];
 
+// Document type enum
+export type DocumentType = 'invoice' | 'credit_note';
+
 export type Database = {
   public: {
     Tables: {
@@ -179,7 +182,8 @@ export type Database = {
           client_id: string;
           invoice_number: string;
           type: "inbound" | "outbound";
-          status: "draft" | "sent" | "paid" | "overdue" | "cancelled";
+          document_type: "invoice" | "credit_note";
+          status: "draft" | "sent" | "paid" | "overdue" | "cancelled" | "voided";
           currency: string;
           issue_date: string;
           due_date: string;
@@ -188,6 +192,9 @@ export type Database = {
           tax_amount: number;
           total: number;
           notes: string | null;
+          related_invoice_id: string | null;
+          correction_reason: string | null;
+          is_locked: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -197,7 +204,8 @@ export type Database = {
           client_id: string;
           invoice_number: string;
           type: "inbound" | "outbound";
-          status?: "draft" | "sent" | "paid" | "overdue" | "cancelled";
+          document_type?: "invoice" | "credit_note";
+          status?: "draft" | "sent" | "paid" | "overdue" | "cancelled" | "voided";
           currency?: string;
           issue_date: string;
           due_date: string;
@@ -206,6 +214,9 @@ export type Database = {
           tax_amount?: number;
           total?: number;
           notes?: string | null;
+          related_invoice_id?: string | null;
+          correction_reason?: string | null;
+          is_locked?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -215,7 +226,8 @@ export type Database = {
           client_id?: string;
           invoice_number?: string;
           type?: "inbound" | "outbound";
-          status?: "draft" | "sent" | "paid" | "overdue" | "cancelled";
+          document_type?: "invoice" | "credit_note";
+          status?: "draft" | "sent" | "paid" | "overdue" | "cancelled" | "voided";
           currency?: string;
           issue_date?: string;
           due_date?: string;
@@ -224,6 +236,9 @@ export type Database = {
           tax_amount?: number;
           total?: number;
           notes?: string | null;
+          related_invoice_id?: string | null;
+          correction_reason?: string | null;
+          is_locked?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -318,6 +333,8 @@ export type Database = {
           cr_certificate_url: string | null;
           invoice_prefix: string;
           invoice_next_number: number;
+          credit_note_prefix: string;
+          credit_note_next_number: number;
           default_tax_rate: number;
           default_payment_terms: number;
           invoice_notes: string | null;
@@ -353,6 +370,8 @@ export type Database = {
           cr_certificate_url?: string | null;
           invoice_prefix?: string;
           invoice_next_number?: number;
+          credit_note_prefix?: string;
+          credit_note_next_number?: number;
           default_tax_rate?: number;
           default_payment_terms?: number;
           invoice_notes?: string | null;
@@ -388,6 +407,8 @@ export type Database = {
           cr_certificate_url?: string | null;
           invoice_prefix?: string;
           invoice_next_number?: number;
+          credit_note_prefix?: string;
+          credit_note_next_number?: number;
           default_tax_rate?: number;
           default_payment_terms?: number;
           invoice_notes?: string | null;
@@ -414,7 +435,8 @@ export type Database = {
     Enums: {
       client_type: "customer" | "supplier" | "both";
       invoice_type: "inbound" | "outbound";
-      invoice_status: "draft" | "sent" | "paid" | "overdue" | "cancelled";
+      document_type: "invoice" | "credit_note";
+      invoice_status: "draft" | "sent" | "paid" | "overdue" | "cancelled" | "voided";
     };
     CompositeTypes: {
       [_ in never]: never;
@@ -448,3 +470,19 @@ export type InsertCompanySettings = InsertTables<"company_settings">;
 export type UpdateCompanySettings = UpdateTables<"company_settings">;
 export type InsertBankAccount = InsertTables<"bank_accounts">;
 export type UpdateBankAccount = UpdateTables<"bank_accounts">;
+
+// Audit log type (read-only)
+export interface AuditLog {
+  id: string;
+  table_name: string;
+  record_id: string;
+  user_id: string | null;
+  action: "INSERT" | "UPDATE" | "DELETE" | "SOFT_DELETE";
+  old_values: Record<string, unknown> | null;
+  new_values: Record<string, unknown> | null;
+  changed_fields: string[] | null;
+  reason: string | null;
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: string;
+}

@@ -278,9 +278,28 @@ const getStatusColor = (status: string) => {
       return { bg: "#fee2e2", text: "#991b1b" };
     case "cancelled":
       return { bg: "#f3f4f6", text: "#6b7280" };
+    case "voided":
+      return { bg: "#f3f4f6", text: "#6b7280" };
     default:
       return { bg: "#f3f4f6", text: "#374151" };
   }
+};
+
+const getDocumentTitle = (documentType: string) => {
+  return documentType === "credit_note" ? "CREDIT NOTE" : "INVOICE";
+};
+
+const getDocumentColors = (documentType: string) => {
+  if (documentType === "credit_note") {
+    return {
+      accent: "#f59e0b", // amber
+      accentLight: "#fef3c7",
+    };
+  }
+  return {
+    accent: "#3b82f6", // blue
+    accentLight: "#dbeafe",
+  };
 };
 
 interface InvoicePDFProps {
@@ -294,6 +313,10 @@ interface InvoicePDFProps {
 export function InvoicePDF({ invoice, items, client, company, bankAccount }: InvoicePDFProps) {
   const statusColors = getStatusColor(invoice.status);
   const currency = invoice.currency || "BHD";
+  const documentType = invoice.document_type || "invoice";
+  const isCreditNote = documentType === "credit_note";
+  const documentTitle = getDocumentTitle(documentType);
+  const documentColors = getDocumentColors(documentType);
 
   return (
     <Document>
@@ -324,27 +347,40 @@ export function InvoicePDF({ invoice, items, client, company, bankAccount }: Inv
               />
             )}
             <View style={styles.invoiceTitle}>
-              <Text style={styles.invoiceLabel}>INVOICE</Text>
+              <Text style={[styles.invoiceLabel, isCreditNote && { color: documentColors.accent }]}>
+                {documentTitle}
+              </Text>
               <Text style={styles.invoiceNumber}>{invoice.invoice_number}</Text>
               <Text style={styles.invoiceDate}>
                 Issued: {formatDate(invoice.issue_date)}
               </Text>
-              <Text style={styles.invoiceDate}>
-                Due: {formatDate(invoice.due_date)}
-              </Text>
+              {!isCreditNote && (
+                <Text style={styles.invoiceDate}>
+                  Due: {formatDate(invoice.due_date)}
+                </Text>
+              )}
               <View
                 style={[
                   styles.statusBadge,
-                  { backgroundColor: statusColors.bg },
+                  { backgroundColor: isCreditNote ? documentColors.accentLight : statusColors.bg },
                 ]}
               >
-                <Text style={[styles.statusText, { color: statusColors.text }]}>
-                  {invoice.status.toUpperCase()}
+                <Text style={[styles.statusText, { color: isCreditNote ? documentColors.accent : statusColors.text }]}>
+                  {isCreditNote ? "CREDIT NOTE" : invoice.status.toUpperCase()}
                 </Text>
               </View>
             </View>
           </View>
         </View>
+
+        {/* Credit Note Reference */}
+        {isCreditNote && invoice.related_invoice_id && (
+          <View style={{ backgroundColor: documentColors.accentLight, padding: 10, marginBottom: 10, borderRadius: 4 }}>
+            <Text style={{ fontSize: 9, color: documentColors.accent }}>
+              This credit note reverses the original invoice. Reason: {invoice.correction_reason || "N/A"}
+            </Text>
+          </View>
+        )}
 
         <View style={styles.divider} />
 
@@ -405,21 +441,23 @@ export function InvoicePDF({ invoice, items, client, company, bankAccount }: Inv
         <View style={styles.totalsSection}>
           <View style={styles.totalsRow}>
             <Text style={styles.totalsLabel}>Subtotal</Text>
-            <Text style={styles.totalsValue}>
+            <Text style={[styles.totalsValue, isCreditNote && { color: "#dc2626" }]}>
               {formatCurrency(invoice.subtotal, currency)}
             </Text>
           </View>
           {invoice.tax_rate > 0 && (
             <View style={styles.totalsRow}>
               <Text style={styles.totalsLabel}>VAT ({invoice.tax_rate}%)</Text>
-              <Text style={styles.totalsValue}>
+              <Text style={[styles.totalsValue, isCreditNote && { color: "#dc2626" }]}>
                 {formatCurrency(invoice.tax_amount, currency)}
               </Text>
             </View>
           )}
           <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Total Due</Text>
-            <Text style={styles.totalValue}>{formatCurrency(invoice.total, currency)}</Text>
+            <Text style={styles.totalLabel}>{isCreditNote ? "Total Credit" : "Total Due"}</Text>
+            <Text style={[styles.totalValue, isCreditNote && { color: "#dc2626" }]}>
+              {formatCurrency(invoice.total, currency)}
+            </Text>
           </View>
         </View>
 
@@ -446,7 +484,10 @@ export function InvoicePDF({ invoice, items, client, company, bankAccount }: Inv
 
         {/* Footer */}
         <Text style={styles.footer}>
-          Thank you for your business! • {company?.company_name || ""}
+          {isCreditNote 
+            ? `This credit note has been issued to adjust your account. • ${company?.company_name || ""}`
+            : `Thank you for your business! • ${company?.company_name || ""}`
+          }
           {company?.website && ` • ${company.website}`}
         </Text>
       </Page>
