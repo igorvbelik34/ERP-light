@@ -68,7 +68,7 @@ import {
   Undo2,
   Archive,
 } from "lucide-react";
-import type { Client, Invoice, InvoiceItem, CompanySettings, BankAccount, DocumentType } from "@/types/database";
+import type { Client, Invoice, CompanySettings, BankAccount, DocumentType } from "@/types/database";
 
 type InvoiceStatus = "draft" | "sent" | "paid" | "overdue" | "cancelled" | "voided";
 type FilterStatus = "all" | InvoiceStatus | "deleted";
@@ -171,7 +171,6 @@ export default function OutboundInvoicesPage() {
   const [isCreditNoteDialogOpen, setIsCreditNoteDialogOpen] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState<InvoiceWithClient | null>(null);
   const [viewingInvoice, setViewingInvoice] = useState<InvoiceWithClient | null>(null);
-  const [viewingItems, setViewingItems] = useState<InvoiceItem[]>([]);
   const [invoiceToDelete, setInvoiceToDelete] = useState<InvoiceWithClient | null>(null);
   const [invoiceForCreditNote, setInvoiceForCreditNote] = useState<InvoiceWithClient | null>(null);
   const [creditNoteReason, setCreditNoteReason] = useState("");
@@ -326,16 +325,8 @@ export default function OutboundInvoicesPage() {
   };
 
   // View invoice details
-  const handleViewInvoice = async (invoice: InvoiceWithClient) => {
-    const supabase = createClient();
-    const { data: items } = await supabase
-      .from("invoice_items")
-      .select("*")
-      .eq("invoice_id", invoice.id)
-      .order("sort_order");
-
+  const handleViewInvoice = (invoice: InvoiceWithClient) => {
     setViewingInvoice(invoice);
-    setViewingItems(items ?? []);
     setIsViewDialogOpen(true);
   };
 
@@ -447,17 +438,10 @@ export default function OutboundInvoicesPage() {
       .select("*")
       .eq("id", relatedInvoiceId)
       .single();
-    
+
     if (relatedInvoice) {
-      const { data: items } = await supabase
-        .from("invoice_items")
-        .select("*")
-        .eq("invoice_id", relatedInvoice.id)
-        .order("sort_order");
-      
       const clientData = clients.find(c => c.id === relatedInvoice.client_id);
       setViewingInvoice({ ...relatedInvoice, client: clientData });
-      setViewingItems(items ?? []);
       setIsViewDialogOpen(true);
     }
   };

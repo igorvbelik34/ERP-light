@@ -347,7 +347,7 @@ export function InvoicePDF({ invoice, items, client, company, bankAccount }: Inv
               />
             )}
             <View style={styles.invoiceTitle}>
-              <Text style={[styles.invoiceLabel, isCreditNote && { color: documentColors.accent }]}>
+              <Text style={[styles.invoiceLabel, isCreditNote ? { color: documentColors.accent } : {}]}>
                 {documentTitle}
               </Text>
               <Text style={styles.invoiceNumber}>{invoice.invoice_number}</Text>
@@ -441,21 +441,21 @@ export function InvoicePDF({ invoice, items, client, company, bankAccount }: Inv
         <View style={styles.totalsSection}>
           <View style={styles.totalsRow}>
             <Text style={styles.totalsLabel}>Subtotal</Text>
-            <Text style={[styles.totalsValue, isCreditNote && { color: "#dc2626" }]}>
+            <Text style={[styles.totalsValue, isCreditNote ? { color: "#dc2626" } : {}]}>
               {formatCurrency(invoice.subtotal, currency)}
             </Text>
           </View>
           {invoice.tax_rate > 0 && (
             <View style={styles.totalsRow}>
               <Text style={styles.totalsLabel}>VAT ({invoice.tax_rate}%)</Text>
-              <Text style={[styles.totalsValue, isCreditNote && { color: "#dc2626" }]}>
+              <Text style={[styles.totalsValue, isCreditNote ? { color: "#dc2626" } : {}]}>
                 {formatCurrency(invoice.tax_amount, currency)}
               </Text>
             </View>
           )}
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>{isCreditNote ? "Total Credit" : "Total Due"}</Text>
-            <Text style={[styles.totalValue, isCreditNote && { color: "#dc2626" }]}>
+            <Text style={[styles.totalValue, isCreditNote ? { color: "#dc2626" } : {}]}>
               {formatCurrency(invoice.total, currency)}
             </Text>
           </View>
