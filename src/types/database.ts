@@ -81,6 +81,47 @@ export type Database = {
           }
         ];
       };
+      exchange_rates: {
+        Row: {
+          id: string;
+          user_id: string;
+          from_currency: string;
+          to_currency: string;
+          rate: number;
+          effective_date: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          from_currency: string;
+          to_currency: string;
+          rate: number;
+          effective_date?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          from_currency?: string;
+          to_currency?: string;
+          rate?: number;
+          effective_date?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "exchange_rates_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       profiles: {
         Row: {
           id: string;
@@ -191,6 +232,10 @@ export type Database = {
           tax_rate: number;
           tax_amount: number;
           total: number;
+          total_bhd: number | null;
+          total_usd: number | null;
+          rate_to_bhd: number | null;
+          rate_to_usd: number | null;
           notes: string | null;
           related_invoice_id: string | null;
           correction_reason: string | null;
@@ -216,6 +261,10 @@ export type Database = {
           tax_rate?: number;
           tax_amount?: number;
           total?: number;
+          total_bhd?: number | null;
+          total_usd?: number | null;
+          rate_to_bhd?: number | null;
+          rate_to_usd?: number | null;
           notes?: string | null;
           related_invoice_id?: string | null;
           correction_reason?: string | null;
@@ -238,6 +287,10 @@ export type Database = {
           tax_rate?: number;
           tax_amount?: number;
           total?: number;
+          total_bhd?: number | null;
+          total_usd?: number | null;
+          rate_to_bhd?: number | null;
+          rate_to_usd?: number | null;
           notes?: string | null;
           related_invoice_id?: string | null;
           correction_reason?: string | null;
@@ -468,6 +521,21 @@ export type Database = {
           message?: string;
         };
       };
+      get_exchange_rate: {
+        Args: {
+          p_user_id: string;
+          p_from_currency: string;
+          p_to_currency: string;
+          p_date?: string;
+        };
+        Returns: number | null;
+      };
+      get_dashboard_stats: {
+        Args: {
+          p_currency?: string;
+        };
+        Returns: DashboardStats;
+      };
     };
     Enums: {
       client_type: "customer" | "supplier" | "both";
@@ -523,3 +591,42 @@ export interface AuditLog {
   user_agent: string | null;
   created_at: string;
 }
+
+// Dashboard statistics returned by get_dashboard_stats RPC
+export interface DashboardStats {
+  // Contacts
+  total_contacts: number;
+  customer_count: number;
+  supplier_count: number;
+  both_count: number;
+
+  // Outbound invoices (revenue)
+  outbound_total: number;
+  outbound_paid: number;
+  outbound_pending: number;
+  outbound_overdue: number;
+
+  // Inbound invoices (expenses)
+  inbound_total: number;
+  inbound_paid: number;
+  inbound_pending: number;
+  inbound_overdue: number;
+
+  // Invoice status counts
+  draft_count: number;
+  sent_count: number;
+  paid_count: number;
+  overdue_count: number;
+  cancelled_count: number;
+
+  // Net position
+  net_balance: number;
+
+  // Currency used for display
+  display_currency: string;
+}
+
+// Exchange rate type
+export type ExchangeRate = Tables<"exchange_rates">;
+export type InsertExchangeRate = InsertTables<"exchange_rates">;
+export type UpdateExchangeRate = UpdateTables<"exchange_rates">;
