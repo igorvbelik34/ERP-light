@@ -195,6 +195,9 @@ export type Database = {
           related_invoice_id: string | null;
           correction_reason: string | null;
           is_locked: boolean;
+          is_deleted: boolean;
+          deleted_at: string | null;
+          deleted_by: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -430,7 +433,41 @@ export type Database = {
       [_ in never]: never;
     };
     Functions: {
-      [_ in never]: never;
+      preview_next_invoice_number: {
+        Args: {
+          p_user_id: string;
+          p_document_type?: "invoice" | "credit_note";
+        };
+        Returns: string | null;
+      };
+      generate_invoice_number: {
+        Args: {
+          p_user_id: string;
+          p_document_type?: "invoice" | "credit_note";
+          p_related_invoice_number?: string | null;
+        };
+        Returns: string;
+      };
+      soft_delete_invoice: {
+        Args: {
+          p_invoice_id: string;
+        };
+        Returns: {
+          success: boolean;
+          error?: string;
+          message?: string;
+        };
+      };
+      restore_invoice: {
+        Args: {
+          p_invoice_id: string;
+        };
+        Returns: {
+          success: boolean;
+          error?: string;
+          message?: string;
+        };
+      };
     };
     Enums: {
       client_type: "customer" | "supplier" | "both";

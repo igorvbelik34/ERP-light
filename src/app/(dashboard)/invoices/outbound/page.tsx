@@ -65,11 +65,13 @@ import {
   Ban,
   Link2,
   FileMinus,
+  Undo2,
+  Archive,
 } from "lucide-react";
 import type { Client, Invoice, InvoiceItem, CompanySettings, BankAccount, DocumentType } from "@/types/database";
 
 type InvoiceStatus = "draft" | "sent" | "paid" | "overdue" | "cancelled" | "voided";
-type FilterStatus = "all" | InvoiceStatus;
+type FilterStatus = "all" | InvoiceStatus | "deleted";
 
 interface InvoiceWithClient extends Invoice {
   client?: Client;
@@ -187,12 +189,12 @@ export default function OutboundInvoicesPage() {
     try {
       const supabase = createClient();
 
-      // Load invoices with client info
+      // Load invoices with client info (including deleted for audit trail)
       const { data: invoicesData, error: invoicesError } = await supabase
         .from("invoices")
         .select("*")
         .eq("type", "outbound")
-        .order("issue_date", { ascending: false });
+        .order("created_at", { ascending: false });
 
       if (invoicesError) throw invoicesError;
 
@@ -255,9 +257,16 @@ export default function OutboundInvoicesPage() {
       invoice.invoice_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
       invoice.client?.name.toLowerCase().includes(searchQuery.toLowerCase());
 
-    const matchesStatus = filterStatus === "all" || invoice.status === filterStatus;
+    // Handle deleted filter separately
+    if (filterStatus === "deleted") {
+      return matchesSearch && invoice.is_deleted;
+    }
 
-    return matchesSearch && matchesStatus;
+    // For other statuses, exclude deleted invoices unless showing "all"
+    const matchesStatus = filterStatus === "all" || invoice.status === filterStatus;
+    const notDeleted = filterStatus === "all" ? true : !invoice.is_deleted;
+
+    return matchesSearch && matchesStatus && notDeleted;
   });
 
   // Calculate totals
@@ -374,21 +383,17 @@ export default function OutboundInvoicesPage() {
 
     try {
       const supabase = createClient();
-      
-      // Physical DELETE - allowed only for draft invoices
-      // DB trigger will block if invoice is locked (issued)
-      const { error } = await supabase
-        .from("invoices")
-        .delete()
-        .eq("id", invoiceToDelete.id);
 
-      if (error) {
-        // Check if it's the "locked invoice" error
-        if (error.message?.includes("issued invoice") || error.message?.includes("Credit Note")) {
-          alert("Cannot delete issued invoice. Use Credit Note instead.");
-        } else {
-          throw error;
-        }
+      // Use soft_delete_invoice RPC for proper audit trail
+      const { data, error } = await supabase
+        .rpc("soft_delete_invoice", { p_invoice_id: invoiceToDelete.id });
+
+      if (error) throw error;
+
+      const result = data as { success: boolean; error?: string; message?: string };
+
+      if (!result.success) {
+        alert(result.error || "Cannot delete invoice");
         return;
       }
 
@@ -400,6 +405,30 @@ export default function OutboundInvoicesPage() {
       alert("Error deleting invoice");
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  // Restore soft-deleted invoice
+  const handleRestore = async (invoice: InvoiceWithClient) => {
+    try {
+      const supabase = createClient();
+
+      const { data, error } = await supabase
+        .rpc("restore_invoice", { p_invoice_id: invoice.id });
+
+      if (error) throw error;
+
+      const result = data as { success: boolean; error?: string; message?: string };
+
+      if (!result.success) {
+        alert(result.error || "Cannot restore invoice");
+        return;
+      }
+
+      loadData();
+    } catch (err) {
+      console.error("Error restoring invoice:", err);
+      alert("Error restoring invoice");
     }
   };
 
@@ -752,6 +781,7 @@ export default function OutboundInvoicesPage() {
             <SelectItem value="overdue">Overdue</SelectItem>
             <SelectItem value="voided">Voided</SelectItem>
             <SelectItem value="cancelled">Cancelled</SelectItem>
+            <SelectItem value="deleted">Deleted</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -792,12 +822,24 @@ export default function OutboundInvoicesPage() {
                 const StatusIcon = statusConfig[invoice.status].icon;
                 const DocTypeIcon = documentTypeConfig[invoice.document_type || "invoice"].icon;
                 const isCreditNote = invoice.document_type === "credit_note";
+                const isDeleted = invoice.is_deleted;
                 return (
-                  <TableRow key={invoice.id} className={isCreditNote ? "bg-amber-50/50" : ""}>
+                  <TableRow
+                    key={invoice.id}
+                    className={`${isCreditNote ? "bg-amber-50/50" : ""} ${isDeleted ? "opacity-40 bg-gray-50" : ""}`}
+                  >
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <div className="font-medium">{invoice.invoice_number}</div>
-                        {isCreditNote && (
+                        <div className={`font-medium ${isDeleted ? "line-through" : ""}`}>
+                          {invoice.invoice_number}
+                        </div>
+                        {isDeleted && (
+                          <Badge variant="secondary" className="text-xs">
+                            <Archive className="mr-1 h-3 w-3" />
+                            Deleted
+                          </Badge>
+                        )}
+                        {isCreditNote && !isDeleted && (
                           <Badge variant="warning" className="text-xs">
                             <DocTypeIcon className="mr-1 h-3 w-3" />
                             CN
@@ -812,10 +854,17 @@ export default function OutboundInvoicesPage() {
                       <div className="text-sm">{invoice.client?.name ?? "Unknown"}</div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant={statusConfig[invoice.status].variant}>
-                        <StatusIcon className="mr-1 h-3 w-3" />
-                        {statusConfig[invoice.status].label}
-                      </Badge>
+                      {isDeleted ? (
+                        <Badge variant="secondary">
+                          <Archive className="mr-1 h-3 w-3" />
+                          Deleted
+                        </Badge>
+                      ) : (
+                        <Badge variant={statusConfig[invoice.status].variant}>
+                          <StatusIcon className="mr-1 h-3 w-3" />
+                          {statusConfig[invoice.status].label}
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell className="hidden md:table-cell">
                       {formatDate(invoice.issue_date)}
@@ -839,8 +888,8 @@ export default function OutboundInvoicesPage() {
                             <Eye className="mr-2 h-4 w-4" />
                             View
                           </DropdownMenuItem>
-                          {/* Only allow editing drafts (not locked) */}
-                          {invoice.status === "draft" && !invoice.is_locked && invoice.document_type === "invoice" && (
+                          {/* Only allow editing drafts (not locked, not deleted) */}
+                          {invoice.status === "draft" && !invoice.is_locked && !isDeleted && invoice.document_type === "invoice" && (
                             <DropdownMenuItem onClick={() => handleEditInvoice(invoice)}>
                               <Pencil className="mr-2 h-4 w-4" />
                               Edit
@@ -855,10 +904,20 @@ export default function OutboundInvoicesPage() {
                             <Printer className="mr-2 h-4 w-4" />
                             Print
                           </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          {/* Status change actions - only for regular invoices */}
-                          {invoice.document_type === "invoice" && invoice.status === "draft" && (
+                          {/* Restore deleted invoice */}
+                          {isDeleted && (
                             <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onClick={() => handleRestore(invoice)}>
+                                <Undo2 className="mr-2 h-4 w-4" />
+                                Restore Invoice
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                          {/* Status change actions - only for non-deleted regular invoices */}
+                          {!isDeleted && invoice.document_type === "invoice" && invoice.status === "draft" && (
+                            <>
+                              <DropdownMenuSeparator />
                               <DropdownMenuItem onClick={() => handleStatusChange(invoice, "sent")}>
                                 <Send className="mr-2 h-4 w-4" />
                                 Mark as Sent
@@ -869,17 +928,17 @@ export default function OutboundInvoicesPage() {
                               </DropdownMenuItem>
                             </>
                           )}
-                          {invoice.document_type === "invoice" && (invoice.status === "sent" || invoice.status === "overdue") && (
+                          {!isDeleted && invoice.document_type === "invoice" && (invoice.status === "sent" || invoice.status === "overdue") && (
                             <DropdownMenuItem onClick={() => handleStatusChange(invoice, "paid")}>
                               <CheckCircle className="mr-2 h-4 w-4" />
                               Mark as Paid
                             </DropdownMenuItem>
                           )}
-                          {/* Issue Credit Note - for issued invoices only */}
-                          {invoice.document_type === "invoice" && 
-                           invoice.is_locked && 
-                           invoice.status !== "voided" && 
-                           invoice.status !== "cancelled" && (
+                          {/* Issue Credit Note - for issued (locked) invoices, not voided */}
+                          {!isDeleted &&
+                           invoice.document_type === "invoice" &&
+                           invoice.is_locked &&
+                           invoice.status !== "voided" && (
                             <>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem onClick={() => handleOpenCreditNoteDialog(invoice)}>
@@ -895,16 +954,18 @@ export default function OutboundInvoicesPage() {
                               View Related Document
                             </DropdownMenuItem>
                           )}
-                          <DropdownMenuSeparator />
-                          {/* Delete - only for drafts */}
-                          {invoice.status === "draft" && !invoice.is_locked && (
-                            <DropdownMenuItem
-                              className="text-destructive"
-                              onClick={() => handleDeleteClick(invoice)}
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Delete
-                            </DropdownMenuItem>
+                          {/* Delete - for drafts and cancelled (not locked) */}
+                          {!isDeleted && !invoice.is_locked && (invoice.status === "draft" || invoice.status === "cancelled") && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                className="text-destructive"
+                                onClick={() => handleDeleteClick(invoice)}
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Delete
+                              </DropdownMenuItem>
+                            </>
                           )}
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -918,18 +979,18 @@ export default function OutboundInvoicesPage() {
       )}
 
       {/* Summary Stats */}
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-5">
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total Invoices</CardDescription>
-            <CardTitle className="text-2xl">{invoices.length}</CardTitle>
+            <CardDescription>Total Active</CardDescription>
+            <CardTitle className="text-2xl">{invoices.filter((i) => !i.is_deleted).length}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Draft</CardDescription>
             <CardTitle className="text-2xl">
-              {invoices.filter((i) => i.status === "draft").length} invoices
+              {invoices.filter((i) => i.status === "draft" && !i.is_deleted).length}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -937,7 +998,7 @@ export default function OutboundInvoicesPage() {
           <CardHeader className="pb-2">
             <CardDescription>Outstanding</CardDescription>
             <CardTitle className="text-2xl">
-              {invoices.filter((i) => i.status === "sent" || i.status === "overdue").length} invoices
+              {invoices.filter((i) => (i.status === "sent" || i.status === "overdue") && !i.is_deleted).length}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -945,7 +1006,15 @@ export default function OutboundInvoicesPage() {
           <CardHeader className="pb-2">
             <CardDescription>Paid</CardDescription>
             <CardTitle className="text-2xl text-emerald-600">
-              {invoices.filter((i) => i.status === "paid").length} invoices
+              {invoices.filter((i) => i.status === "paid" && !i.is_deleted).length}
+            </CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Deleted</CardDescription>
+            <CardTitle className="text-2xl text-muted-foreground">
+              {invoices.filter((i) => i.is_deleted).length}
             </CardTitle>
           </CardHeader>
         </Card>
