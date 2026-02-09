@@ -630,3 +630,68 @@ export interface DashboardStats {
 export type ExchangeRate = Tables<"exchange_rates">;
 export type InsertExchangeRate = InsertTables<"exchange_rates">;
 export type UpdateExchangeRate = UpdateTables<"exchange_rates">;
+
+// Bank transaction type (for Tarabut integration)
+export interface BankTransaction {
+  id: string;
+  bank_account_id: string;
+  user_id: string;
+  tarabut_transaction_id: string | null;
+  transaction_date: string;
+  booking_date: string | null;
+  value_date: string | null;
+  amount: number;
+  currency: string;
+  description: string | null;
+  reference: string | null;
+  merchant_name: string | null;
+  transaction_type: 'credit' | 'debit';
+  category: string | null;
+  balance_after: number | null;
+  matched_invoice_id: string | null;
+  is_reconciled: boolean;
+  reconciled_at: string | null;
+  reconciled_by: string | null;
+  reconciliation_notes: string | null;
+  raw_data: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Tarabut consent type
+export interface TarabutConsent {
+  id: string;
+  user_id: string;
+  consent_id: string;
+  consent_token: string | null;
+  refresh_token: string | null;
+  provider_id: string;
+  provider_name: string | null;
+  status: 'pending' | 'authorized' | 'active' | 'expired' | 'revoked';
+  scope: string[] | null;
+  authorized_at: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+  linked_account_ids: string[] | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Bank sync log type
+export interface BankSyncLog {
+  id: string;
+  user_id: string;
+  bank_account_id: string | null;
+  sync_type: 'transactions' | 'balances' | 'accounts';
+  status: 'started' | 'success' | 'error';
+  records_fetched: number;
+  records_created: number;
+  records_updated: number;
+  error_code: string | null;
+  error_message: string | null;
+  started_at: string;
+  completed_at: string | null;
+  duration_ms: number | null;
+  request_data: Record<string, unknown> | null;
+  response_data: Record<string, unknown> | null;
+}
