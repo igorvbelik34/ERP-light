@@ -4,6 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3005",
+    "dev:pm2": "pm2 start ecosystem.config.js",
+    "start:pm2": "pm2 start ecosystem.config.js --env production",
+    "stop": "pm2 stop erp-lite",
+    "restart": "pm2 restart erp-lite",
+    "logs": "pm2 logs erp-lite",
+    "status": "pm2 status",
     "build": "next build",
     "start": "next start -p 3005",
     "lint": "next lint"
